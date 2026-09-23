@@ -1,0 +1,12 @@
+.git
+.github
+tests
+schemas
+**/__pycache__
+*.egg-info
+build
+dist
+cuantario_demo
+*.sarif
+cuantario_cbom.json
+cuantario_informe.md

@@ -1,21 +1,38 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "cuantario"
-version = "0.5.0"
+version = "0.5.1"
 description = "Inventario criptográfico y priorización post-cuántica con políticas europeas (UE / CCN)"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Alejandro Garcia Linero" }]
 dependencies = ["cryptography>=42"]
+keywords = ["post-quantum", "pqc", "cbom", "cyclonedx", "sarif", "ml-kem", "nis2", "ens", "ccn"]
 classifiers = [
-    "License :: OSI Approved :: Apache Software License",
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: System Administrators",
+    "Natural Language :: Spanish",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Security :: Cryptography",
 ]
-keywords = ["post-quantum", "pqc", "cbom", "cyclonedx", "ml-kem", "nis2", "ens"]
+
+[project.urls]
+Homepage = "https://github.com/alegarlinx/cuantario"
+Repository = "https://github.com/alegarlinx/cuantario"
+Changelog = "https://github.com/alegarlinx/cuantario/blob/main/CHANGELOG.md"
+Issues = "https://github.com/alegarlinx/cuantario/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]

@@ -1,0 +1,45 @@
+name: CI
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e ".[dev]" jsonschema referencing
+      - name: Descargar esquemas oficiales (CycloneDX 1.6 y SARIF 2.1.0)
+        run: |
+          mkdir -p schemas && cd schemas
+          curl -sfLO https://raw.githubusercontent.com/CycloneDX/specification/master/schema/bom-1.6.schema.json
+          curl -sfLO https://raw.githubusercontent.com/CycloneDX/specification/master/schema/spdx.schema.json
+          curl -sfLO https://raw.githubusercontent.com/CycloneDX/specification/master/schema/jsf-0.82.schema.json
+          curl -sfLO https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json
+      - run: pytest -q
+        env:
+          PQC_SCHEMAS: ${{ github.workspace }}/schemas
+
+  # La propia Action se prueba contra el proyecto de ejemplo.
+  action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Crear proyecto de ejemplo
+        run: pip install . && cuantario --demo --salida /tmp/ignorar
+      - uses: ./
+        id: radar
+        with:
+          ruta: cuantario_demo
+      - name: Comprobar salidas
+        run: |
+          test -s "${{ steps.radar.outputs.sarif }}"
+          test -s "${{ steps.radar.outputs.cbom }}"
+          test -s "${{ steps.radar.outputs.informe }}"

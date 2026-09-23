@@ -24,9 +24,29 @@ migración en español**. Ambos formatos se validan en cada cambio contra sus es
 
 ## Instalación
 
+**Con pip, desde GitHub:**
+
 ```bash
-pip install -e .
+pip install git+https://github.com/alegarlinx/cuantario.git
 ```
+
+**Con Docker, sin instalar Python:**
+
+```bash
+docker run --rm ghcr.io/alegarlinx/cuantario --tls ejemplo.es
+```
+
+Para analizar una carpeta, móntala en `/scan`; los informes se guardan en ella:
+
+```bash
+docker run --rm -v "$PWD:/scan" ghcr.io/alegarlinx/cuantario .
+```
+
+En Linux, si la carpeta no admite escritura para el contenedor, añade `--user "$(id -u):$(id -g)"`.
+La imagen se ejecuta sin privilegios de administrador.
+
+**Desde las releases:** cada versión incluye el paquete instalable en la página de
+[releases](https://github.com/alegarlinx/cuantario/releases).
 
 ## Uso
 
@@ -162,4 +182,4 @@ pytest -q
 
 ## Licencia
 
-Copyright 2026 Alejandro Garcia Linero. Distribuido bajo la [Apache License 2.0](LICENSE).
+Copyright 2026 Alejandro Garcia Linero. Distribuido bajo la [Apache License 2.0](https://github.com/alegarlinx/cuantario/blob/main/LICENSE).

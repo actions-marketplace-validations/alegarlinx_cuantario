@@ -83,6 +83,15 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:
+        return _main(argv)
+    except BrokenPipeError:  # p. ej. `cuantario ... | head`: salida cortada, no es un error
+        import os
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return 0
+
+
+def _main(argv: list[str] | None) -> int:
     ap = parser()
     a = ap.parse_args(argv)
     if a.demo:

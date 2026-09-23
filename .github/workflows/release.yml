@@ -1,0 +1,56 @@
+name: Publicar versión
+# Se ejecuta al publicar una release en GitHub:
+#   1. Construye el paquete y lo adjunta a la release (descargable desde GitHub).
+#   2. Lo publica en PyPI solo si la variable del repositorio PUBLISH_PYPI vale "true".
+#      Usa Trusted Publishing: no hace falta guardar ninguna contraseña ni token.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # para adjuntar los archivos a la release
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Comprobar que la etiqueta coincide con la versión del paquete
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          VERSION=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::La etiqueta $TAG no coincide con la versión v$VERSION de pyproject.toml"; exit 1
+          fi
+      - run: pip install build twine && python -m build && twine check --strict dist/*
+      - name: Adjuntar a la release de GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/* --clobber
+      - uses: actions/upload-artifact@v6
+        with:
+          name: dist
+          path: dist/
+
+  pypi:
+    needs: build
+    if: vars.PUBLISH_PYPI == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/cuantario
+    permissions:
+      id-token: write   # necesario para Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

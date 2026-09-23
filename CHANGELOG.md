@@ -1,5 +1,17 @@
 # Registro de cambios
 
+## 0.5.1
+- **Imagen Docker** publicada en `ghcr.io/alegarlinx/cuantario`: se construye y se prueba en cada
+  cambio, y solo se publica si supera la prueba. Se ejecuta sin privilegios de administrador.
+- Instalación directa desde GitHub (`pip install git+https://github.com/alegarlinx/cuantario.git`).
+- Cada release adjunta automáticamente el paquete instalable.
+- Publicación en PyPI preparada con Trusted Publishing (sin tokens); se activa con la variable
+  del repositorio `PUBLISH_PYPI`.
+- Comprobación automática de que la etiqueta de la release coincide con la versión del paquete.
+- Metadatos de empaquetado modernizados (licencia SPDX, enlaces del proyecto, clasificadores).
+- Compatibilidad verificada con cryptography 50.
+- La salida cortada (p. ej. `cuantario ... | head`) ya no muestra un error.
+
 ## 0.5.0
 - El proyecto pasa a llamarse **Cuantario** (antes PQC-Radar), para evitar confusión con otras
   publicaciones del sector que usan ese nombre. Cambian el paquete (`cuantario`), el comando
