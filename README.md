@@ -54,6 +54,10 @@ Para TLS se manda un ClientHello por grupo con el `key_share` vacío; si el serv
 con un HelloRetryRequest que lo nombra. Después se ofrecen los grupos clásicos y los post-cuánticos en los dos
 órdenes para ver cuál elige el servidor, porque hay servidores que admiten `X25519MLKEM768` pero nunca lo usan.
 
+En código Python, `hashlib.md5()` o `sha1()` salen con prioridad media porque pueden ser un simple checksum;
+con `usedforsecurity=False` bajan a baja. HMAC-SHA1 no se trata como roto. Las exclusiones de las listas de
+cifrados (`!MD5`) no cuentan como uso.
+
 Solo se lee lo que el servidor anuncia en el saludo, igual que un navegador. Aun así, analiza únicamente
 servidores propios o con permiso.
 
@@ -79,7 +83,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: alegarlinx/cuantario@v0.5.3
+      - uses: alegarlinx/cuantario@v0.6.0
         id: cuantario
         with:
           perfil: ccn
@@ -107,6 +111,8 @@ Otras herramientas del mismo espacio: CryptoBOM-Forge (Santander, open source, s
 ```bash
 pip install -e ".[dev]"
 pytest
+ruff check cuantario tests
+mypy cuantario
 ```
 
 Apache 2.0.

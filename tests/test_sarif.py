@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from cuantario.cli import main
-from cuantario.model import Context
+from cuantario.model import Context, assess
 from cuantario.sarif import build_sarif
 from cuantario.scanner import scan
 
@@ -43,7 +43,7 @@ def test_sarif_excludes_ok_and_keeps_certificates(tmp_path, monkeypatch):
 
 def test_sarif_private_key_is_redacted(tmp_path):
     (tmp_path / "k.pem").write_text("-----BEGIN PRIVATE KEY-----\nSECRETO123\n-----END PRIVATE KEY-----\n")
-    sarif = build_sarif(scan(tmp_path, Context()))
+    sarif = build_sarif(assess(scan(tmp_path), Context()))
     text = json.dumps(sarif)
     assert "pqc/private-key" in text and "SECRETO123" not in text
 
@@ -51,7 +51,7 @@ def test_sarif_private_key_is_redacted(tmp_path):
 def test_sarif_fingerprints_are_stable(tmp_path):
     (tmp_path / "a.py").write_text("import hashlib\nhashlib.md5(b'x')\n")
     def fingerprints():
-        return [r["partialFingerprints"] for r in build_sarif(scan(tmp_path, Context()))["runs"][0]["results"]]
+        return [r["partialFingerprints"] for r in build_sarif(assess(scan(tmp_path), Context()))["runs"][0]["results"]]
     assert fingerprints() == fingerprints()
 
 

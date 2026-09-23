@@ -5,16 +5,70 @@ from __future__ import annotations
 import functools
 import re
 from dataclasses import dataclass
+from enum import Enum
 
-VULN = "vulnerable"   # Shor
-WEAK = "debilitado"   # Grover
-SAFE = "resistente"
-HYBRID = "hibrido"
-BROKEN = "roto_hoy"
-SECRET = "secreto_expuesto"
 
-PRIORITIES = ["CRITICO", "ALTO", "MEDIO", "BAJO", "OK"]
-CONFIDENCE = ["alta", "media", "baja"]
+class _StrEnum(str, Enum):
+    # En 3.12 cambió cómo se formatean los Enum con mixin; así el valor sale igual en todas las versiones.
+    def __str__(self) -> str:
+        return str(self.value)
+
+
+class Status(_StrEnum):
+    VULNERABLE = "vulnerable"  # Shor
+    WEAK = "debilitado"
+    SAFE = "resistente"
+    HYBRID = "hibrido"
+    BROKEN = "roto_hoy"
+    SECRET = "secreto_expuesto"
+
+
+class Priority(_StrEnum):
+    CRITICAL = "CRITICO"
+    HIGH = "ALTO"
+    MEDIUM = "MEDIO"
+    LOW = "BAJO"
+    OK = "OK"
+
+    @property
+    def rank(self) -> int:
+        return list(Priority).index(self)
+
+
+class Confidence(_StrEnum):
+    HIGH = "alta"
+    MEDIUM = "media"
+    LOW = "baja"
+
+    @property
+    def rank(self) -> int:
+        return list(Confidence).index(self)
+
+
+class Primitive(_StrEnum):
+    # Vocabulario de CycloneDX 1.6: los valores acaban tal cual en el CBOM.
+    PKE = "pke"
+    KEM = "kem"
+    KEY_AGREE = "key-agree"
+    SIGNATURE = "signature"
+    AE = "ae"
+    BLOCK_CIPHER = "block-cipher"
+    STREAM_CIPHER = "stream-cipher"
+    HASH = "hash"
+    MAC = "mac"
+    OTHER = "other"
+
+
+class Source(_StrEnum):
+    CODE = "codigo"
+    CONFIG = "config"
+    CERTIFICATE = "certificado"
+    SECRET = "secreto"
+    TLS = "tls"
+    SSH = "ssh"
+
+
+KEY_EXCHANGE = (Primitive.PKE, Primitive.KEM, Primitive.KEY_AGREE)
 
 EU_MILESTONES = [
     ("31/12/2026", "Estrategias nacionales PQC, inventarios criptográficos y mapas de dependencias."),
@@ -27,62 +81,95 @@ PQC_KEM = "ML-KEM-768 (FIPS 203), preferiblemente híbrido X25519MLKEM768"
 PQC_SIG = "ML-DSA-65 (FIPS 204) o SLH-DSA (FIPS 205), en modo híbrido durante la transición"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Rule:
     id: str
     name: str
     pattern: str
-    primitive: str  # vocabulario de CycloneDX 1.6
-    status: str
-    hndl: bool
+    primitive: Primitive
+    status: Status
+    harvest_risk: bool
     replacement: str
     nist_level: int = 0
+    note: str = ""
+    # Borra lo emparejado antes de aplicar las reglas siguientes, para que "X25519MLKEM768"
+    # no cuente también como X25519 ni "hmac-sha1" como SHA-1.
     consumes: bool = False
 
     @property
-    def rx(self) -> re.Pattern:
+    def rx(self) -> re.Pattern[str]:
         return _compile(self.pattern)
 
 
 @functools.cache
-def _compile(pattern: str) -> re.Pattern:
+def _compile(pattern: str) -> re.Pattern[str]:
     return re.compile(pattern)
 
 
 RULES: list[Rule] = [
-    Rule("hybrid-kem", "Intercambio híbrido clásico + ML-KEM",
-         r"(?i)X25519[-_]?MLKEM768|SecP(?:256|384)r1[-_]?MLKEM\d+|mlkem768x25519|X25519Kyber768",
-         "kem", HYBRID, True, "Correcto: mantener", 3, consumes=True),
-    Rule("hybrid-sntrup", "Híbrido sntrup761 + X25519 (SSH, no estandarizado por NIST)",
-         r"sntrup761x25519-sha512(?:@openssh\.com)?",
-         "kem", HYBRID, True, "Aceptable; preferible mlkem768x25519-sha256 (ML-KEM, FIPS 203)", 0, consumes=True),
-    Rule("ml-kem", "ML-KEM / Kyber", r"(?i)\bML-?KEM(?:-?(?:512|768|1024))?\b|\bKyber(?:512|768|1024)?\b",
-         "kem", SAFE, True, "Correcto: valorar modo híbrido", 3),
-    Rule("ml-dsa", "ML-DSA / Dilithium", r"(?i)\bML-?DSA(?:-?(?:44|65|87))?\b|\bDilithium[235]?\b",
-         "signature", SAFE, False, "Correcto", 3),
-    Rule("slh-dsa", "SLH-DSA / SPHINCS+", r"(?i)\bSLH-?DSA\b|\bSPHINCS\+?",
-         "signature", SAFE, False, "Correcto", 1),
-    Rule("rsa", "RSA", r"\bRSA\b|\brsa\.generate|\bimport rsa\b|RSA_generate_key|ssh-rsa|rsa-sha2-(?:256|512)"
-         r"|\b[RP]S(?:256|384|512)\b",
-         "pke", VULN, True, PQC_KEM + " / " + PQC_SIG),
-    Rule("ecdsa", "ECDSA / curvas NIST", r"(?i)\bECDSA\b|\bES(?:256|384|512)\b|ecdsa-sha2-nistp\d+"
-         r"|\bsecp(?:256|384|521)r1\b|\bprime256v1\b",
-         "signature", VULN, False, PQC_SIG),
-    Rule("ecdh", "ECDH / X25519 / X448", r"(?i)\bECDHE?\b|ecdh-sha2-nistp\d+|\bX25519\b|curve25519-sha256|\bX448\b",
-         "key-agree", VULN, True, PQC_KEM),
-    Rule("dh", "Diffie-Hellman finito", r"\bDHE?-|(?i:diffie-hellman-group[\w-]*|\bffdhe\d+\b)",
-         "key-agree", VULN, True, PQC_KEM),
-    Rule("dsa", "DSA", r"(?<![\w-])DSA\b|ssh-dss", "signature", VULN, False, PQC_SIG),
-    Rule("eddsa", "EdDSA (Ed25519/Ed448)", r"(?i)\bEd(?:25519|448)\b|ssh-ed25519|\bEdDSA\b",
-         "signature", VULN, False, PQC_SIG),
-    Rule("aes-128", "AES-128", r"(?i)\bAES[-_]?128\b|aes128-(?:gcm|ctr|cbc)", "ae", WEAK, True, "AES-256-GCM", 1),
-    Rule("aes-256", "AES-256", r"(?i)\bAES[-_]?256\b|aes256-(?:gcm|ctr)", "ae", SAFE, True, "Correcto", 5),
-    Rule("chacha20", "ChaCha20-Poly1305", r"(?i)ChaCha20[-_]?Poly1305", "ae", SAFE, True, "Correcto", 5),
-    Rule("3des", "3DES", r"(?i)\b3DES\b|DES-EDE3|TripleDES|\bDESede\b", "block-cipher", BROKEN, True, "AES-256-GCM"),
-    Rule("des", "DES", r"(?<![\w-])DES(?:-CBC|-ECB)?(?![\w-])", "block-cipher", BROKEN, True, "AES-256-GCM"),
-    Rule("rc4", "RC4", r"(?i)\bRC4\b|\bARCFOUR\b", "stream-cipher", BROKEN, True, "ChaCha20-Poly1305 o AES-GCM"),
-    Rule("md5", "MD5", r"(?i)\bMD5\b|hashlib\.md5", "hash", BROKEN, False, "SHA-256 / SHA3-256"),
-    Rule("sha1", "SHA-1", r"(?i)\bSHA-?1\b|hashlib\.sha1", "hash", BROKEN, False, "SHA-256 / SHA3-256"),
+    Rule(id="hybrid-kem", name="Intercambio híbrido clásico + ML-KEM",
+         pattern=r"(?i)X25519[-_]?MLKEM768|SecP(?:256|384)r1[-_]?MLKEM\d+|mlkem768x25519|X25519Kyber768",
+         primitive=Primitive.KEM, status=Status.HYBRID, harvest_risk=True,
+         replacement="Correcto: mantener", nist_level=3, consumes=True),
+    Rule(id="hybrid-sntrup", name="Híbrido sntrup761 + X25519 (SSH, no estandarizado por NIST)",
+         pattern=r"sntrup761x25519-sha512(?:@openssh\.com)?",
+         primitive=Primitive.KEM, status=Status.HYBRID, harvest_risk=True,
+         replacement="Aceptable; preferible mlkem768x25519-sha256 (ML-KEM, FIPS 203)", consumes=True),
+    Rule(id="ml-kem", name="ML-KEM / Kyber",
+         pattern=r"(?i)\bML-?KEM(?:-?(?:512|768|1024))?\b|\bKyber(?:512|768|1024)?\b",
+         primitive=Primitive.KEM, status=Status.SAFE, harvest_risk=True,
+         replacement="Correcto: valorar modo híbrido", nist_level=3),
+    Rule(id="ml-dsa", name="ML-DSA / Dilithium",
+         pattern=r"(?i)\bML-?DSA(?:-?(?:44|65|87))?\b|\bDilithium[235]?\b",
+         primitive=Primitive.SIGNATURE, status=Status.SAFE, harvest_risk=False, replacement="Correcto", nist_level=3),
+    Rule(id="slh-dsa", name="SLH-DSA / SPHINCS+", pattern=r"(?i)\bSLH-?DSA\b|\bSPHINCS\+?",
+         primitive=Primitive.SIGNATURE, status=Status.SAFE, harvest_risk=False, replacement="Correcto", nist_level=1),
+    Rule(id="rsa", name="RSA",
+         pattern=r"\bRSA\b|\brsa\.generate|\bimport rsa\b|RSA_generate_key|ssh-rsa|rsa-sha2-(?:256|512)"
+                 r"|\b[RP]S(?:256|384|512)\b",
+         primitive=Primitive.PKE, status=Status.VULNERABLE, harvest_risk=True,
+         replacement=f"{PQC_KEM} / {PQC_SIG}"),
+    Rule(id="ecdsa", name="ECDSA / curvas NIST",
+         pattern=r"(?i)\bECDSA\b|\bES(?:256|384|512)\b|ecdsa-sha2-nistp\d+|\bsecp(?:256|384|521)r1\b|\bprime256v1\b",
+         primitive=Primitive.SIGNATURE, status=Status.VULNERABLE, harvest_risk=False, replacement=PQC_SIG),
+    Rule(id="ecdh", name="ECDH / X25519 / X448",
+         pattern=r"(?i)\bECDHE?\b|ecdh-sha2-nistp\d+|\bX25519\b|curve25519-sha256|\bX448\b",
+         primitive=Primitive.KEY_AGREE, status=Status.VULNERABLE, harvest_risk=True, replacement=PQC_KEM),
+    Rule(id="dh", name="Diffie-Hellman finito",
+         pattern=r"\bDHE?-|(?i:diffie-hellman-group[\w-]*|\bffdhe\d+\b)",
+         primitive=Primitive.KEY_AGREE, status=Status.VULNERABLE, harvest_risk=True, replacement=PQC_KEM),
+    Rule(id="dsa", name="DSA", pattern=r"(?<![\w-])DSA\b|ssh-dss",
+         primitive=Primitive.SIGNATURE, status=Status.VULNERABLE, harvest_risk=False, replacement=PQC_SIG),
+    Rule(id="eddsa", name="EdDSA (Ed25519/Ed448)", pattern=r"(?i)\bEd(?:25519|448)\b|ssh-ed25519|\bEdDSA\b",
+         primitive=Primitive.SIGNATURE, status=Status.VULNERABLE, harvest_risk=False, replacement=PQC_SIG),
+    Rule(id="aes-cbc", name="Modo CBC sin autenticación",
+         pattern=r"(?i)\bAES[-_]?(?:128|192|256)?[-_/]?CBC\b|\baes(?:128|192|256)-cbc\b",
+         primitive=Primitive.BLOCK_CIPHER, status=Status.WEAK, harvest_risk=False,
+         replacement="AES-256-GCM o ChaCha20-Poly1305",
+         note="CBC no autentica: sin un MAC aparte admite manipulación del mensaje y ataques de padding oracle."),
+    Rule(id="aes-128", name="AES-128", pattern=r"(?i)\bAES[-_]?128\b|aes128-(?:gcm|ctr|cbc)",
+         primitive=Primitive.AE, status=Status.WEAK, harvest_risk=True, replacement="AES-256-GCM", nist_level=1),
+    Rule(id="aes-256", name="AES-256", pattern=r"(?i)\bAES[-_]?256\b|aes256-(?:gcm|ctr)",
+         primitive=Primitive.AE, status=Status.SAFE, harvest_risk=True, replacement="Correcto", nist_level=5),
+    Rule(id="chacha20", name="ChaCha20-Poly1305", pattern=r"(?i)ChaCha20[-_]?Poly1305",
+         primitive=Primitive.AE, status=Status.SAFE, harvest_risk=True, replacement="Correcto", nist_level=5),
+    Rule(id="3des", name="3DES", pattern=r"(?i)\b3DES\b|DES-EDE3|TripleDES|\bDESede\b",
+         primitive=Primitive.BLOCK_CIPHER, status=Status.BROKEN, harvest_risk=True, replacement="AES-256-GCM"),
+    Rule(id="des", name="DES", pattern=r"(?<![\w-])DES(?:-CBC|-ECB)?(?![\w-])",
+         primitive=Primitive.BLOCK_CIPHER, status=Status.BROKEN, harvest_risk=True, replacement="AES-256-GCM"),
+    Rule(id="rc4", name="RC4", pattern=r"(?i)\bRC4\b|\bARCFOUR\b",
+         primitive=Primitive.STREAM_CIPHER, status=Status.BROKEN, harvest_risk=True,
+         replacement="ChaCha20-Poly1305 o AES-GCM"),
+    Rule(id="hmac-legacy", name="HMAC con MD5 o SHA-1",
+         pattern=r"(?i)\bhmac[-_](?:sha1|md5)\b(?:[\w@.-]*)|\bHmac(?:SHA1|MD5)\b",
+         primitive=Primitive.MAC, status=Status.WEAK, harvest_risk=False, replacement="HMAC-SHA-256",
+         note="No está roto: lo que falla en MD5 y SHA-1 son las colisiones, que no afectan a HMAC. "
+              "Migrar por higiene, sin urgencia.",
+         consumes=True),
+    Rule(id="md5", name="MD5", pattern=r"(?i)\bMD5\b|hashlib\.md5",
+         primitive=Primitive.HASH, status=Status.BROKEN, harvest_risk=False, replacement="SHA-256 / SHA3-256"),
+    Rule(id="sha1", name="SHA-1", pattern=r"(?i)\bSHA-?1\b|hashlib\.sha1",
+         primitive=Primitive.HASH, status=Status.BROKEN, harvest_risk=False, replacement="SHA-256 / SHA3-256"),
 ]
 RULES_BY_ID = {r.id: r for r in RULES}
 

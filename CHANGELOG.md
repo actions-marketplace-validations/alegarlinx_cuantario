@@ -1,5 +1,26 @@
 # Registro de cambios
 
+## 0.6.0
+- Estados, prioridades, confianza, primitivas y orígenes pasan a ser `Enum`. Los valores en el CBOM,
+  el SARIF y el informe no cambian.
+- `Finding` es inmutable y solo admite argumentos con nombre. `extra` se sustituye por campos tipados
+  (`key_size`, `cert`). `hndl` pasa a llamarse `harvest_risk`.
+- La prioridad se calcula en un único sitio (`model.assess`); los detectores solo producen hallazgos.
+- La CLI valida hosts, puertos, años y timeout antes de empezar.
+- Los parsers de TLS y SSH comprueban longitudes antes de leer: un servidor que responde basura
+  produce `ProtocolError` en lugar de tumbar el escaneo. Probado con fuzzing (hypothesis).
+- Una sonda TLS que no responde ya no descarta el resto del host: se indica qué grupos quedaron sin
+  respuesta y la confianza baja a media. Un puerto cerrado se informa como no accesible en lugar de
+  aparecer como analizado sin hallazgos.
+- El detector de Python resuelve alias de importación (`import hashlib as h`, `from hashlib import md5`).
+- HMAC-SHA1 y HMAC-MD5 salen como prioridad baja con explicación, no como críticos.
+- `hashlib.md5`/`sha1` en código: prioridad baja con `usedforsecurity=False` y media si no se sabe el uso.
+  En configuración siguen siendo críticos.
+- Se detecta el modo CBC sin autenticación.
+- Las exclusiones de las listas de cifrados (`!MD5`, `!RC4`) ya no cuentan como usos.
+- El código del `--demo` sale de la CLI a `cuantario/demo.py`.
+- `ruff` y `mypy --strict` en CI.
+
 ## 0.5.3
 - El índice de preparación se divide en dos: **intercambio de claves y cifrado** (lo urgente, expuesto a
   "cosechar ahora, descifrar después") y **firmas y certificados**. Antes se mezclaban, y servidores

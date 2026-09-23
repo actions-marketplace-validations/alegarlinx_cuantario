@@ -8,8 +8,17 @@ import threading
 
 import pytest
 
-from cuantario.model import Context
-from cuantario.probes import HRR_RANDOM, build_client_hello, parse_server_response, parse_target, scan_ssh, scan_tls
+from cuantario.model import Context, assess
+from cuantario.probes import (
+    HRR_RANDOM,
+    Reply,
+    ServerReply,
+    build_client_hello,
+    parse_server_response,
+    parse_target,
+    scan_ssh,
+    scan_tls,
+)
 
 PQ = {0x11EC, 0x11EB, 0x11ED, 0x0201, 0x0202}
 
@@ -133,15 +142,15 @@ def test_parse_hrr_and_alert():
         chunk = data[pos[0]:pos[0] + n]
         pos[0] += n
         return chunk
-    assert parse_server_response(read) == {"type": "hrr", "group": 0x11EC, "tls13": True}
+    assert parse_server_response(read) == ServerReply(Reply.HRR, 0x11EC)
     pos[0], data = 0, ALERT
-    assert parse_server_response(read)["type"] == "alert"
+    assert parse_server_response(read).kind is Reply.REJECTED
 
 
 def test_tls_server_preferring_pq_is_ok():
     srv, port = tls_server({0x11EC, 0x001D}, "pq")
     with srv:
-        f = by_rule(scan_tls("127.0.0.1", port, Context(), timeout=3))
+        f = by_rule(assess(scan_tls("127.0.0.1", port, timeout=3), Context()))
     assert f["hybrid-kem"].priority == "OK"
     assert f["ecdh"].priority == "MEDIO"  # X25519 queda como respaldo
     assert "prefiere el grupo post-cuántico" in f["ecdh"].evidence
@@ -150,7 +159,7 @@ def test_tls_server_preferring_pq_is_ok():
 def test_tls_server_following_client_is_ok():
     srv, port = tls_server({0x11EC, 0x001D}, "cliente")
     with srv:
-        f = by_rule(scan_tls("127.0.0.1", port, Context(), timeout=3))
+        f = by_rule(assess(scan_tls("127.0.0.1", port, timeout=3), Context()))
     assert f["ecdh"].priority == "MEDIO"
     assert "preferencia del cliente" in f["ecdh"].evidence
 
@@ -158,7 +167,7 @@ def test_tls_server_following_client_is_ok():
 def test_tls_server_forcing_classical_is_critical():
     srv, port = tls_server({0x11EC, 0x001D}, "clasico")
     with srv:
-        f = by_rule(scan_tls("127.0.0.1", port, Context(), timeout=3))
+        f = by_rule(assess(scan_tls("127.0.0.1", port, timeout=3), Context()))
     assert f["ecdh"].priority == "CRITICO"  # soporta PQC, pero nunca la usa
     assert "elige el grupo clásico" in f["ecdh"].evidence
 
@@ -166,7 +175,7 @@ def test_tls_server_forcing_classical_is_critical():
 def test_tls_server_without_pq():
     srv, port = tls_server({0x001D, 0x0017}, "cliente")
     with srv:
-        f = by_rule(scan_tls("127.0.0.1", port, Context(), timeout=3))
+        f = by_rule(assess(scan_tls("127.0.0.1", port, timeout=3), Context()))
     assert "hybrid-kem" not in f
     assert f["ecdh"].priority == "CRITICO"
     assert f["ecdh"].location == f"tls://127.0.0.1:{port}"
@@ -176,11 +185,11 @@ def test_ssh_server_with_hybrid_kex():
     srv, port = ssh_server("mlkem768x25519-sha256,sntrup761x25519-sha512,curve25519-sha256,ext-info-s",
                            "rsa-sha2-512,ssh-ed25519", "chacha20-poly1305@openssh.com,aes128-ctr")
     with srv:
-        f = by_rule(scan_ssh("127.0.0.1", port, Context(), timeout=3))
+        f = by_rule(assess(scan_ssh("127.0.0.1", port, timeout=3), Context()))
     assert f["hybrid-kem"].priority == "OK"
     assert f["hybrid-sntrup"].priority == "OK"
     assert f["ecdh"].priority == "MEDIO"
-    assert f["rsa"].priority == "ALTO" and not f["rsa"].hndl   # clave de host: solo firma
+    assert f["rsa"].priority == "ALTO" and not f["rsa"].harvest_risk   # clave de host: solo firma
     assert f["eddsa"].priority == "ALTO"
     assert f["aes-128"].priority == "BAJO"
     assert f["chacha20"].priority == "OK"
@@ -190,7 +199,7 @@ def test_ssh_server_with_hybrid_kex():
 def test_ssh_server_classical_only():
     srv, port = ssh_server("curve25519-sha256,diffie-hellman-group14-sha256", "ssh-rsa", "aes256-ctr")
     with srv:
-        f = by_rule(scan_ssh("127.0.0.1", port, Context(), timeout=3))
+        f = by_rule(assess(scan_ssh("127.0.0.1", port, timeout=3), Context()))
     assert f["ecdh"].priority == "CRITICO" and f["dh"].priority == "CRITICO"
 
 
@@ -214,7 +223,7 @@ def test_real_openssl_server(tmp_path):
                 break
             except OSError:
                 time.sleep(0.1)
-        findings = scan_tls("127.0.0.1", port, Context(), timeout=3)
+        findings = assess(scan_tls("127.0.0.1", port, timeout=3), Context())
     finally:
         proc.kill()
     names = {f.name for f in findings}

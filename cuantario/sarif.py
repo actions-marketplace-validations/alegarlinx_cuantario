@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import hashlib
+from typing import Any
 
 from . import __version__
 from .model import Finding
-from .rules import RULES_BY_ID
+from .rules import RULES_BY_ID, Priority
 
 INFO_URI = "https://github.com/alegarlinx/cuantario"
 
 # security-severity es lo que usa GitHub para clasificar la alerta como crítica, alta, media o baja.
-LEVELS = {"CRITICO": ("error", "9.5"), "ALTO": ("error", "7.5"), "MEDIO": ("warning", "5.0"),
-          "BAJO": ("note", "2.0")}
+LEVELS = {
+    Priority.CRITICAL: ("error", "9.5"),
+    Priority.HIGH: ("error", "7.5"),
+    Priority.MEDIUM: ("warning", "5.0"),
+    Priority.LOW: ("note", "2.0"),
+}
 
 EXTRA_RULES = {
     "certificado": ("Certificado con firma vulnerable a la computación cuántica",
@@ -25,18 +30,19 @@ EXTRA_RULES = {
 
 
 def _rule_key(f: Finding) -> str:
-    return "certificado" if f.source == "certificado" else f.rule_id
+    return "certificado" if f.cert else f.rule_id
 
 
 def _describe(key: str) -> tuple[str, str]:
     if key in EXTRA_RULES:
         return EXTRA_RULES[key]
-    r = RULES_BY_ID.get(key)
-    if r is None:
+    rule = RULES_BY_ID.get(key)
+    if rule is None:
         return key, key
-    return (f"{r.name}: {r.status.replace('_', ' ')}",
-            f"Uso de {r.name} detectado. Estado frente a la amenaza cuántica: {r.status.replace('_', ' ')}. "
-            f"Sustituto recomendado: {r.replacement}.")
+    status = rule.status.value.replace("_", " ")
+    return (f"{rule.name}: {status}",
+            f"Uso de {rule.name} detectado. Estado frente a la amenaza cuántica: {status}. "
+            f"Sustituto recomendado: {rule.replacement}.")
 
 
 def _fingerprint(f: Finding) -> str:
@@ -44,49 +50,53 @@ def _fingerprint(f: Finding) -> str:
     return hashlib.sha256(f"{f.location}|{_rule_key(f)}|{f.evidence}".encode()).hexdigest()[:32]
 
 
-def build_sarif(findings: list[Finding]) -> dict:
-    results, rules, order = [], {}, []
+def _rule(key: str, level: str, severity: str) -> dict[str, Any]:
+    short, full = _describe(key)
+    return {
+        "id": f"pqc/{key}",
+        "name": key.replace("-", "_"),
+        "shortDescription": {"text": short},
+        "fullDescription": {"text": full},
+        "helpUri": INFO_URI,
+        "help": {"text": full, "markdown": full},
+        "defaultConfiguration": {"level": level},
+        "properties": {"tags": ["security", "cryptography", "post-quantum"], "security-severity": severity},
+    }
+
+
+def build_sarif(findings: list[Finding]) -> dict[str, Any]:
+    rules: dict[str, dict[str, Any]] = {}
+    results = []
     for f in findings:
         # Lo analizado en vivo no tiene archivo ni línea a la que GitHub pueda apuntar.
-        if f.priority == "OK" or "://" in f.location:
+        if f.priority is None or f.priority is Priority.OK or "://" in f.location:
             continue
         key = _rule_key(f)
         level, severity = LEVELS[f.priority]
         if key not in rules:
-            short, full = _describe(key)
-            rules[key] = {
-                "id": f"pqc/{key}",
-                "name": key.replace("-", "_"),
-                "shortDescription": {"text": short},
-                "fullDescription": {"text": full},
-                "helpUri": INFO_URI,
-                "help": {"text": full, "markdown": full},
-                "defaultConfiguration": {"level": level},
-                "properties": {"tags": ["security", "cryptography", "post-quantum"],
-                               "security-severity": severity},
-            }
-            order.append(key)
+            rules[key] = _rule(key, level, severity)
         elif float(severity) > float(rules[key]["properties"]["security-severity"]):
             rules[key]["properties"]["security-severity"] = severity
-        location = {"physicalLocation": {"artifactLocation": {"uri": f.location.replace("\\", "/")}}}
+
+        location: dict[str, Any] = {"physicalLocation": {"artifactLocation": {"uri": f.location.replace("\\", "/")}}}
         if f.line:
             location["physicalLocation"]["region"] = {"startLine": f.line}
         results.append({
             "ruleId": f"pqc/{key}",
-            "ruleIndex": order.index(key),
+            "ruleIndex": list(rules).index(key),
             "level": level,
             "message": {"text": f"[{f.priority}] {f.name} (confianza {f.confidence}). {f.reason} "
                                 f"Sustituto: {f.replacement}."},
             "locations": [location],
             "partialFingerprints": {"cuantario/v1": _fingerprint(f)},
-            "properties": {"prioridad": f.priority, "confianza": f.confidence},
+            "properties": {"prioridad": f.priority.value, "confianza": f.confidence.value},
         })
     return {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
         "runs": [{
             "tool": {"driver": {"name": "Cuantario", "version": __version__, "semanticVersion": __version__,
-                                "informationUri": INFO_URI, "rules": [rules[k] for k in order]}},
+                                "informationUri": INFO_URI, "rules": list(rules.values())}},
             "results": results,
         }],
     }

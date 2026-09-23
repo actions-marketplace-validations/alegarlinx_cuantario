@@ -6,10 +6,10 @@ import json
 import pytest
 
 from cuantario.cli import main
-from cuantario.model import Context, Finding, prioritize
+from cuantario.model import Context, Finding, assess, prioritize
 from cuantario.outputs import build_cbom
 from cuantario.python_ast import scan_python
-from cuantario.rules import RULES_BY_ID, VULN
+from cuantario.rules import RULES_BY_ID, Confidence, Priority, Source, Status
 from cuantario.scanner import scan, scan_text
 
 
@@ -27,7 +27,7 @@ def ids(findings):
     ("cipher AES-256-GCM", {"aes-256"}),
 ])
 def test_text_rules_positive(text, expected):
-    assert ids(scan_text(text, "f", "config", "media")) == expected
+    assert ids(scan_text(text, "f", Source.CONFIG, Confidence.MEDIUM)) == expected
 
 
 @pytest.mark.parametrize("text,forbidden", [
@@ -40,14 +40,13 @@ def test_text_rules_positive(text, expected):
     ("the word crsa or rsafe", "rsa"),
 ])
 def test_text_rules_negative(text, forbidden):
-    assert forbidden not in ids(scan_text(text, "f", "config", "media"))
+    assert forbidden not in ids(scan_text(text, "f", Source.CONFIG, Confidence.MEDIUM))
 
 
 def test_classical_fallback_next_to_hybrid_is_medium():
-    [hyb, fb] = scan_text("ssl_ecdh_curve X25519MLKEM768:X25519;", "f", "config", "media")
+    [hyb, fb] = scan_text("ssl_ecdh_curve X25519MLKEM768:X25519;", "f", Source.CONFIG, Confidence.MEDIUM)
     assert hyb.rule_id == "hybrid-kem" and fb.rule_id == "ecdh" and fb.fallback
-    prioritize(fb, Context())
-    assert fb.priority == "MEDIO"
+    assert prioritize(fb, Context()).priority is Priority.MEDIUM
 
 
 def test_ast_ignores_comments_and_docstrings():
@@ -60,7 +59,7 @@ def test_ast_detects_real_calls_with_high_confidence():
            "k = rsa.generate_private_key(public_exponent=65537, key_size=3072)\n")
     [f] = scan_python(src, "a.py")
     assert f.rule_id == "rsa" and f.confidence == "alta" and f.line == 2
-    assert f.extra["key_size"] == 3072
+    assert f.key_size == 3072
 
 
 def test_ast_small_rsa_key_is_broken():
@@ -81,24 +80,23 @@ def test_ast_string_config_medium_confidence():
 
 def test_invalid_python_falls_back_to_text(tmp_path):
     (tmp_path / "broken.py").write_text("def x(:\n  RSA\n")
-    [f] = scan(tmp_path, Context())
+    [f] = assess(scan(tmp_path), Context())
     assert f.rule_id == "rsa" and f.confidence == "baja"
 
 
 def _vuln_kex():
     r = RULES_BY_ID["ecdh"]
-    return Finding(r.id, r.name, VULN, r.primitive, "f", 1, "", r.replacement, "config", hndl=True)
+    return Finding(rule_id=r.id, name=r.name, status=Status.VULNERABLE, primitive=r.primitive,
+                   source=Source.CONFIG, location="f", line=1, replacement=r.replacement, harvest_risk=True)
 
 
 def test_mosca_violated_is_critical():
-    f = _vuln_kex()
-    prioritize(f, Context(data_life=10, migration=5, crqc_year=2035))
+    f = prioritize(_vuln_kex(), Context(data_life=10, migration=5, crqc_year=2035))
     assert f.priority == "CRITICO"
 
 
 def test_mosca_not_violated_is_high():
-    f = _vuln_kex()
-    prioritize(f, Context(data_life=1, migration=1, crqc_year=2100))
+    f = prioritize(_vuln_kex(), Context(data_life=1, migration=1, crqc_year=2100))
     assert f.priority == "ALTO"
 
 
@@ -118,19 +116,19 @@ def _write_cert(path, bits, years):
 
 def test_weak_certificate_is_critical(tmp_path):
     _write_cert(tmp_path / "weak.pem", 1024, 1)
-    [f] = scan(tmp_path, Context(high_risk=False))
+    [f] = assess(scan(tmp_path), Context(high_risk=False))
     assert f.priority == "CRITICO" and f.status == "roto_hoy"
 
 
 def test_long_lived_certificate_depends_on_risk(tmp_path):
     _write_cert(tmp_path / "c.pem", 2048, 8)
-    assert scan(tmp_path, Context(high_risk=True))[0].priority == "CRITICO"
-    assert scan(tmp_path, Context(high_risk=False))[0].priority == "MEDIO"
+    assert assess(scan(tmp_path), Context(high_risk=True))[0].priority == "CRITICO"
+    assert assess(scan(tmp_path), Context(high_risk=False))[0].priority == "MEDIO"
 
 
 def test_private_key_is_reported_and_redacted(tmp_path):
     (tmp_path / "k.pem").write_text("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n")
-    [f] = scan(tmp_path, Context())
+    [f] = assess(scan(tmp_path), Context())
     assert f.priority == "CRITICO" and f.evidence == "[REDACTADO]"
     assert build_cbom([f], "t")["components"] == []  # nunca va al CBOM
 
@@ -158,9 +156,7 @@ def test_min_confidence_filter(tmp_path, monkeypatch):
 
 def _report_for(line: str, ctx: Context) -> str:
     from cuantario.outputs import build_report
-    findings = scan_text(line, "tls://ejemplo:443", "tls", "alta")
-    for f in findings:
-        prioritize(f, ctx)
+    findings = assess(scan_text(line, "tls://ejemplo:443", Source.TLS, Confidence.HIGH), ctx)
     return build_report(findings, ctx, "prueba")
 
 
@@ -191,7 +187,7 @@ def _scores_for(*lines):
     from cuantario.outputs import readiness_scores
     findings = []
     for line in lines:
-        findings += scan_text(line, "tls://ejemplo:443", "tls", "alta")
+        findings += scan_text(line, "tls://ejemplo:443", Source.TLS, Confidence.HIGH)
     return readiness_scores(findings)
 
 
