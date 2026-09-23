@@ -7,23 +7,23 @@ from pathlib import Path
 
 import pytest
 
-from pqc_radar.cli import main
-from pqc_radar.model import Context
-from pqc_radar.sarif import build_sarif
-from pqc_radar.scanner import scan
+from cuantario.cli import main
+from cuantario.model import Context
+from cuantario.sarif import build_sarif
+from cuantario.scanner import scan
 
 
 def _demo(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     main(["--demo", "--perfil", "ccn", "--sarif", "out.sarif"])
-    return (json.loads((tmp_path / "pqc_radar_cbom.json").read_text()),
+    return (json.loads((tmp_path / "cuantario_cbom.json").read_text()),
             json.loads((tmp_path / "out.sarif").read_text()))
 
 
 def test_sarif_structure(tmp_path, monkeypatch):
     _, sarif = _demo(tmp_path, monkeypatch)
     run = sarif["runs"][0]
-    assert sarif["version"] == "2.1.0" and run["tool"]["driver"]["name"] == "PQC-Radar"
+    assert sarif["version"] == "2.1.0" and run["tool"]["driver"]["name"] == "Cuantario"
     rule_ids = [r["id"] for r in run["tool"]["driver"]["rules"]]
     assert len(rule_ids) == len(set(rule_ids))                      # sin reglas duplicadas
     for res in run["results"]:

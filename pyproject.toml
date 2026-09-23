@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cuantario"
+version = "0.5.0"
+description = "Inventario criptográfico y priorización post-cuántica con políticas europeas (UE / CCN)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = ["cryptography>=42"]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security :: Cryptography",
+]
+keywords = ["post-quantum", "pqc", "cbom", "cyclonedx", "ml-kem", "nis2", "ens"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+cuantario = "cuantario.cli:main"
+
+[tool.setuptools]
+packages = ["cuantario"]

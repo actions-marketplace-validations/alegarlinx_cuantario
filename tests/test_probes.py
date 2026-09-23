@@ -8,8 +8,8 @@ import threading
 
 import pytest
 
-from pqc_radar.model import Context
-from pqc_radar.probes import (HRR_RANDOM, build_client_hello, parse_server_response, parse_target, scan_ssh,
+from cuantario.model import Context
+from cuantario.probes import (HRR_RANDOM, build_client_hello, parse_server_response, parse_target, scan_ssh,
                               scan_tls)
 
 PQ = {0x11EC, 0x11EB, 0x11ED, 0x0201, 0x0202}
