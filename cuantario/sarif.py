@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from typing import Any
 
 from . import __version__
-from .model import Finding
-from .rules import RULES_BY_ID, Priority
+from .model import Assessment
+from .rules import Priority
 
 INFO_URI = "https://github.com/alegarlinx/cuantario"
 
@@ -18,8 +19,8 @@ LEVELS = {
     Priority.LOW: ("note", "2.0"),
 }
 
-EXTRA_RULES = {
-    "certificado": ("Certificado con firma vulnerable a la computación cuántica",
+DESCRIPTIONS = {
+    "certificate": ("Certificado con firma vulnerable a la computación cuántica",
                     "Certificado X.509 cuya clave pública (RSA, ECDSA, EdDSA o DSA) romperá un ordenador "
                     "cuántico. Planificar su sustitución por ML-DSA o SLH-DSA, en modo híbrido durante la transición."),
     "private-key": ("Clave privada en el repositorio",
@@ -28,32 +29,26 @@ EXTRA_RULES = {
 }
 
 
-def _rule_key(f: Finding) -> str:
-    return "certificado" if f.cert else f.rule_id
-
-
-def _describe(key: str) -> tuple[str, str]:
-    if key in EXTRA_RULES:
-        return EXTRA_RULES[key]
-    rule = RULES_BY_ID.get(key)
-    if rule is None:
-        return key, key
-    status = rule.status.value.replace("_", " ")
+def _describe(a: Assessment) -> tuple[str, str]:
+    rule = a.detection.rule
+    if rule.id in DESCRIPTIONS:
+        return DESCRIPTIONS[rule.id]
+    status = rule.status.label
     return (f"{rule.name}: {status}",
             f"Uso de {rule.name} detectado. Estado frente a la amenaza cuántica: {status}. "
             f"Sustituto recomendado: {rule.replacement}.")
 
 
-def _fingerprint(f: Finding) -> str:
-    # Estable entre ejecuciones aunque se muevan líneas: archivo + regla + evidencia.
-    return hashlib.sha256(f"{f.location}|{_rule_key(f)}|{f.evidence}".encode()).hexdigest()[:32]
+def _fingerprint(a: Assessment) -> str:
+    d = a.detection
+    return hashlib.sha256(f"{d.location.target}|{d.rule.id}|{d.evidence.snippet}".encode()).hexdigest()[:32]
 
 
-def _rule(key: str, level: str, severity: str) -> dict[str, Any]:
-    short, full = _describe(key)
+def _rule(a: Assessment, level: str, severity: str) -> dict[str, Any]:
+    short, full = _describe(a)
     return {
-        "id": f"pqc/{key}",
-        "name": key.replace("-", "_"),
+        "id": f"pqc/{a.detection.rule.id}",
+        "name": a.detection.rule.id.replace("-", "_"),
         "shortDescription": {"text": short},
         "fullDescription": {"text": full},
         "helpUri": INFO_URI,
@@ -63,32 +58,32 @@ def _rule(key: str, level: str, severity: str) -> dict[str, Any]:
     }
 
 
-def build_sarif(findings: list[Finding]) -> dict[str, Any]:
+def build_sarif(assessments: Sequence[Assessment]) -> dict[str, Any]:
     rules: dict[str, dict[str, Any]] = {}
     results = []
-    for f in findings:
-        # Lo analizado en vivo no tiene archivo ni línea a la que GitHub pueda apuntar.
-        if f.priority is None or f.priority is Priority.OK or "://" in f.location:
+    for a in assessments:
+        d = a.detection
+        if a.priority is Priority.OK or "://" in d.location.target:
             continue
-        key = _rule_key(f)
-        level, severity = LEVELS[f.priority]
-        if key not in rules:
-            rules[key] = _rule(key, level, severity)
-        elif float(severity) > float(rules[key]["properties"]["security-severity"]):
-            rules[key]["properties"]["security-severity"] = severity
+        level, severity = LEVELS[a.priority]
+        if d.rule.id not in rules:
+            rules[d.rule.id] = _rule(a, level, severity)
+        elif float(severity) > float(rules[d.rule.id]["properties"]["security-severity"]):
+            rules[d.rule.id]["properties"]["security-severity"] = severity
 
-        location: dict[str, Any] = {"physicalLocation": {"artifactLocation": {"uri": f.location.replace("\\", "/")}}}
-        if f.line:
-            location["physicalLocation"]["region"] = {"startLine": f.line}
+        location: dict[str, Any] = {"physicalLocation": {"artifactLocation": {
+            "uri": d.location.target.replace("\\", "/")}}}
+        if d.location.line:
+            location["physicalLocation"]["region"] = {"startLine": d.location.line}
         results.append({
-            "ruleId": f"pqc/{key}",
-            "ruleIndex": list(rules).index(key),
+            "ruleId": f"pqc/{d.rule.id}",
+            "ruleIndex": list(rules).index(d.rule.id),
             "level": level,
-            "message": {"text": f"[{f.priority}] {f.name} (confianza {f.confidence}). {f.reason} "
-                                f"Sustituto: {f.replacement}."},
+            "message": {"text": f"[{a.priority.label}] {d.name} (confianza {d.confidence.label}). {a.reason} "
+                                f"Sustituto: {d.rule.replacement}."},
             "locations": [location],
-            "partialFingerprints": {"cuantario/v1": _fingerprint(f)},
-            "properties": {"prioridad": f.priority.value, "confianza": f.confidence.value},
+            "partialFingerprints": {"cuantario/v1": _fingerprint(a)},
+            "properties": {"priority": a.priority.value, "confidence": d.confidence.value},
         })
     return {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",

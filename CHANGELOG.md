@@ -1,5 +1,31 @@
 # Registro de cambios
 
+## 0.7.0
+- TLS 1.0 y 1.1 se detectan con un ClientHello propio por versión. Antes, un servidor que solo aceptaba
+  TLS 1.0 daba 0 hallazgos sin avisar, porque OpenSSL 3 se niega a negociar esas versiones.
+- Un reset de conexión (WAF, rate limit) se reintenta con espera exponencial y, si persiste, se informa como
+  error de red en lugar de como "grupo no soportado". Un cierre ordenado sí cuenta como rechazo.
+- Se analiza la cadena completa de certificados: se lee del handshake de TLS 1.2, se comprueba que cada
+  certificado firma al anterior y se valida contra el almacén del sistema. En servidores solo TLS 1.3 se usa
+  `get_unverified_chain()` en Python 3.13+.
+- Las sondas de un host se lanzan en paralelo con límite de hilos y pausa mínima entre conexiones; los hosts
+  también se analizan en paralelo (`--hosts-paralelos`, `--intervalo`).
+- Grupos TLS, suites de cifrado y algoritmos SSH se mapean directamente a reglas, sin pasar por texto.
+  La suite negociada en TLS 1.2 y anteriores se lee del ServerHello, sin depender de la librería ssl.
+- Análisis de Python con ámbitos: los imports locales no se filtran a otras funciones, los parámetros y las
+  reasignaciones tapan a los módulos, los métodos no ven los atributos de su clase, y se siguen las
+  reasignaciones de funciones criptográficas (`md5 = hashlib.md5`).
+- Los archivos se leen como UTF-8 o UTF-16 con BOM; los que no se pueden decodificar o superan 2 MB se
+  listan como omitidos en el informe y se avisa en la consola.
+- `Finding` se divide en `Detection` (lo encontrado) y `Assessment` (prioridad y motivo). La evidencia es un
+  objeto (`snippet`, `notes`, `server_preference`) en lugar de texto concatenado.
+- `SecurityUse`, `Profile` y `ServerPreference` pasan a ser `Enum`. Todos los `Enum` usan identificadores en
+  inglés y etiquetas en español para mostrar; el CBOM y el SARIF usan los identificadores.
+- Las claves de host RSA de SSH cuentan como firma, no como intercambio de claves.
+- La versión se lee de los metadatos del paquete (`importlib.metadata`).
+- Tests reorganizados por módulo con fixtures en `conftest.py`; incluyen servidores OpenSSL y OpenSSH reales.
+- `probes.py` se divide en `net.py`, `tls.py` y `ssh.py`.
+
 ## 0.6.0
 - Estados, prioridades, confianza, primitivas y orígenes pasan a ser `Enum`. Los valores en el CBOM,
   el SARIF y el informe no cambian.

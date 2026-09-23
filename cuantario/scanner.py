@@ -2,13 +2,16 @@
 # Copyright 2026 Alejandro Garcia Linero
 from __future__ import annotations
 
+import codecs
+import contextlib
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from .certs import scan_cert
-from .model import Finding
+from .certs import scan_cert_file
+from .model import Detection, Evidence, Location, detect
 from .python_ast import scan_python
-from .rules import PRIVKEY_RX, RULES, Confidence, Primitive, Source, Status
+from .rules import PRIVKEY_RX, TEXT_RULES, Confidence, Primitive, SecurityUse, Source, Status
 
 CODE_EXT = {".java", ".kt", ".js", ".ts", ".go", ".rs", ".c", ".h", ".cpp", ".cs", ".php", ".rb",
             ".swift", ".scala", ".sh", ".gradle"}
@@ -23,67 +26,100 @@ MAX_BYTES = 2_000_000
 # En las listas de cifrados de OpenSSL/nginx "!MD5" o "!RC4" significa justo lo contrario: desactivado.
 EXCLUDED_TOKEN_RX = re.compile(r"![\w-]+")
 
+_BOMS = [(codecs.BOM_UTF8, "utf-8-sig"), (codecs.BOM_UTF16_LE, "utf-16"), (codecs.BOM_UTF16_BE, "utf-16")]
 
-def scan_secrets(text: str, rel: str) -> list[Finding]:
-    return [Finding(rule_id="private-key", name="Clave privada", status=Status.SECRET, primitive=Primitive.OTHER,
-                    source=Source.SECRET, location=rel, line=n, evidence="[REDACTADO]",
-                    replacement="Usar un gestor de secretos o un HSM", confidence=Confidence.HIGH)
+
+@dataclass(frozen=True)
+class SkippedFile:
+    path: str
+    reason: str
+
+
+@dataclass
+class ScanResult:
+    detections: list[Detection] = field(default_factory=list)
+    skipped: list[SkippedFile] = field(default_factory=list)
+
+
+def decode(data: bytes) -> str:
+    for bom, encoding in _BOMS:
+        if data.startswith(bom):
+            return data.decode(encoding)
+    return data.decode("utf-8")
+
+
+def scan_secrets(text: str, rel: str) -> list[Detection]:
+    return [detect("private-key", location=Location(rel, n), source=Source.SECRET, confidence=Confidence.HIGH,
+                   evidence=Evidence(snippet="[REDACTADO]"))
             for n, line in enumerate(text.splitlines(), 1) if PRIVKEY_RX.search(line)]
 
 
-def scan_text(text: str, rel: str, source: Source, confidence: Confidence) -> list[Finding]:
-    security_use = None if source is Source.CODE else True
-    findings = []
+def scan_text(text: str, target: str, source: Source, confidence: Confidence) -> list[Detection]:
+    security_use = SecurityUse.UNKNOWN if source is Source.CODE else SecurityUse.SECURITY
+    detections = []
     for n, raw in enumerate(text.splitlines(), 1):
         if PRIVKEY_RX.search(raw):
             continue
         line = EXCLUDED_TOKEN_RX.sub(" ", raw)
         hybrid_seen = False
-        for rule in RULES:
+        for rule in TEXT_RULES:
             if not rule.rx.search(line):
                 continue
-            findings.append(Finding(
-                rule_id=rule.id, name=rule.name, status=rule.status, primitive=rule.primitive, source=source,
-                location=rel, line=n, evidence=raw.strip()[:160], replacement=rule.replacement,
-                confidence=confidence, harvest_risk=rule.harvest_risk, nist_level=rule.nist_level, note=rule.note,
-                security_use=security_use,
+            detections.append(detect(
+                rule.id, location=Location(target, n), source=source, confidence=confidence,
+                evidence=Evidence(snippet=raw.strip()[:160]), security_use=security_use,
                 fallback=hybrid_seen and rule.primitive is Primitive.KEY_AGREE,
             ))
             if rule.consumes:
                 line = rule.rx.sub(" ", line)
             if rule.status is Status.HYBRID:
                 hybrid_seen = True
-    return findings
+    return detections
 
 
-def scan_file(path: Path, rel: str) -> list[Finding]:
+def scan_file(path: Path, rel: str, result: ScanResult) -> None:
     ext = path.suffix.lower()
-    if ext in CERT_EXT:
-        return scan_cert(path, rel) + scan_secrets(path.read_text(errors="ignore"), rel)
+    is_config = ext in CONFIG_EXT or path.name in CONFIG_NAMES
+    if ext not in CERT_EXT and ext != ".py" and not is_config and ext not in CODE_EXT:
+        return
+    try:
+        size = path.stat().st_size
+        if size > MAX_BYTES:
+            result.skipped.append(SkippedFile(rel, f"supera {MAX_BYTES // 1_000_000} MB"))
+            return
+        data = path.read_bytes()
+    except OSError as e:
+        result.skipped.append(SkippedFile(rel, f"no se pudo leer: {e.strerror or e}"))
+        return
 
-    text = path.read_text(encoding="utf-8", errors="ignore")
+    if ext in CERT_EXT:
+        result.detections += scan_cert_file(data, rel)
+        with contextlib.suppress(UnicodeDecodeError):
+            result.detections += scan_secrets(decode(data), rel)
+        return
+
+    try:
+        text = decode(data)
+    except UnicodeDecodeError:
+        result.skipped.append(SkippedFile(rel, "codificación no reconocida (ni UTF-8 ni UTF-16 con BOM)"))
+        return
+
     if ext == ".py":
         found = scan_python(text, rel)
         if found is None:
             found = scan_text(text, rel, Source.CODE, Confidence.LOW)
-    elif ext in CONFIG_EXT or path.name in CONFIG_NAMES:
+    elif is_config:
         found = scan_text(text, rel, Source.CONFIG, Confidence.MEDIUM)
-    elif ext in CODE_EXT:
-        found = scan_text(text, rel, Source.CODE, Confidence.LOW)
     else:
-        return []
-    return found + scan_secrets(text, rel)
+        found = scan_text(text, rel, Source.CODE, Confidence.LOW)
+    result.detections += found + scan_secrets(text, rel)
 
 
-def scan(root: Path) -> list[Finding]:
-    findings: list[Finding] = []
+def scan(root: Path) -> ScanResult:
+    result = ScanResult()
     for path in sorted(root.rglob("*")):
         rel = path.relative_to(root)
-        if not path.is_file() or SKIP_DIRS.intersection(rel.parts):
+        if SKIP_DIRS.intersection(rel.parts) or not path.is_file():
             continue
-        try:
-            if path.stat().st_size <= MAX_BYTES:
-                findings += scan_file(path, str(rel))
-        except OSError:
-            continue
-    return findings
+        scan_file(path, str(rel), result)
+    return result
