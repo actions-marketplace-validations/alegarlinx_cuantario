@@ -6,3 +6,5 @@ cuantario_cbom.json
 cuantario_informe.md
 schemas/
 *.sarif
+.venv/
+venv/

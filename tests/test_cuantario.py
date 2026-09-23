@@ -162,3 +162,35 @@ def test_min_confidence_filter(tmp_path, monkeypatch):
     cbom = json.loads((tmp_path / "cuantario_cbom.json").read_text())
     ctx = {o["additionalContext"] for c in cbom["components"] for o in c["evidence"]["occurrences"]}
     assert ctx == {"confianza=alta"}
+
+
+# ---------------------------------------------------------------- informe
+def _report_for(line: str, ctx: Context) -> str:
+    from cuantario.outputs import build_report
+    findings = scan_text(line, "tls://ejemplo:443", "tls", "alta")
+    for f in findings:
+        prioritize(f, ctx)
+    return build_report(findings, ctx, "prueba")
+
+
+def test_mosca_message_not_alarming_when_everything_has_pq():
+    # Caso real de Cloudflare/Google: híbrido preferido y X25519 como respaldo.
+    report = _report_for("grupos aceptados: X25519MLKEM768, X25519", Context())
+    assert "ya son urgentes" not in report and "migración es urgente" not in report
+    assert "no se ha encontrado cifrado ni intercambio de claves clásico sin protección" in report
+
+
+def test_mosca_message_urgent_when_classical_only():
+    report = _report_for("grupos aceptados: X25519, ECDHE-P256", Context())
+    assert "hay 1 uso de cifrado o intercambio de claves clásico sin protección post-cuántica" in report
+
+
+def test_mosca_message_when_inequality_not_violated():
+    report = _report_for("grupos aceptados: X25519", Context(data_life=1, migration=1, crqc_year=2100))
+    assert "no se cumple con estos parámetros" in report
+
+
+def test_report_lists_ok_findings():
+    report = _report_for("grupos aceptados: X25519MLKEM768, X25519", Context())
+    assert "## Correcto (1)" in report
+    assert "Intercambio híbrido clásico + ML-KEM" in report.split("## Correcto")[1]

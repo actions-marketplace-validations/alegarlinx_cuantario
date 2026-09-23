@@ -56,6 +56,19 @@ def build_cbom(findings: list[Finding], target: str) -> dict:
             "components": list(comps.values())}
 
 
+def mosca_message(findings: list[Finding], ctx: Context) -> str:
+    """Conclusión de la desigualdad de Mosca, según lo que se haya encontrado realmente."""
+    exposed = [f for f in findings if f.status == VULN and f.hndl and not f.fallback]
+    if not ctx.mosca_violated:
+        return "La desigualdad no se cumple con estos parámetros, pero conviene planificar la migración."
+    if exposed:
+        n = len(exposed)
+        return (f"⚠️ **La desigualdad se cumple y hay {n} uso{'s' if n != 1 else ''} de cifrado o intercambio "
+                f"de claves clásico sin protección post-cuántica: su migración es urgente.**")
+    return ("La desigualdad se cumple con estos parámetros, pero no se ha encontrado cifrado ni intercambio de "
+            "claves clásico sin protección post-cuántica. ✅")
+
+
 def build_report(findings: list[Finding], ctx: Context, target: str, unreachable: list[str] | None = None) -> str:
     counts = {p: sum(f.priority == p for f in findings) for p in PRIORITIES}
     score, ready, total = readiness_score(findings)
@@ -71,8 +84,7 @@ def build_report(findings: list[Finding], ctx: Context, target: str, unreachable
     L += ["", "## Parámetros de Mosca", "",
           f"Vida útil de la confidencialidad: **{ctx.data_life} años** · tiempo de migración: "
           f"**{ctx.migration} años** · año estimado de un ordenador cuántico relevante: **{ctx.crqc_year}**.", "",
-          ("⚠️ **La desigualdad se cumple: los intercambios de clave vulnerables ya son urgentes.**"
-           if ctx.mosca_violated else "La desigualdad no se cumple con estos parámetros, pero conviene planificar."),
+          mosca_message(findings, ctx),
           "", "La columna *Confianza* indica cómo se detectó: **alta** (análisis sintáctico o certificado), "
           "**media** (configuración o cadena de texto del programa), **baja** (búsqueda de texto en código).", ""]
     for p in PRIORITIES[:-1]:
@@ -87,6 +99,17 @@ def build_report(findings: list[Finding], ctx: Context, target: str, unreachable
             L.append(f"| {f.name} | `{loc}` | {f.confidence} | `{ev}` | {f.reason} | {f.replacement} |")
         if len(items) > 60:
             L.append(f"| … | {len(items) - 60} más en el CBOM | | | | |")
+        L.append("")
+    ok = [f for f in findings if f.priority == "OK"]
+    if ok:
+        L += [f"## Correcto ({len(ok)})", "", "Criptografía resistente, híbrida o con margen suficiente. No requiere acción.", "",
+              "| Activo | Ubicación | Confianza | Evidencia |", "|---|---|---|---|"]
+        for f in ok[:60]:
+            loc = f"{f.location}:{f.line}" if f.line else f.location
+            ev = f.evidence.replace("|", "\\|").replace("`", "'")
+            L.append(f"| {f.name} | `{loc}` | {f.confidence} | `{ev}` |")
+        if len(ok) > 60:
+            L.append(f"| … | {len(ok) - 60} más en el CBOM | | |")
         L.append("")
     if unreachable:
         L += ["## Objetivos no accesibles", ""] + [f"- {u}" for u in unreachable] + [""]

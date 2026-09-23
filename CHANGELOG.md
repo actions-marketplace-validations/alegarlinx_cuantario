@@ -1,5 +1,13 @@
 # Registro de cambios
 
+## 0.5.2
+- Validado contra servidores reales con criptografía post-cuántica (Cloudflare y Google):
+  detecta correctamente `X25519MLKEM768`, `MLKEM1024` y la preferencia del servidor.
+- La conclusión de la desigualdad de Mosca ahora depende de lo encontrado: solo avisa de urgencia
+  si hay cifrado o intercambio de claves clásico sin protección post-cuántica.
+- El informe incluye una sección "Correcto" con la criptografía que no requiere acción.
+- `.gitignore` excluye los entornos virtuales de Python.
+
 ## 0.5.1
 - **Imagen Docker** publicada en `ghcr.io/alegarlinx/cuantario`: se construye y se prueba en cada
   cambio, y solo se publica si supera la prueba. Se ejecuta sin privilegios de administrador.
