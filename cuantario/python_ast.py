@@ -1,20 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Alejandro Garcia Linero
-"""Detector para Python basado en el árbol sintáctico (AST).
-
-En lugar de buscar palabras en el texto, entiende la estructura del programa:
-ignora comentarios y nombres de variables, y solo informa de llamadas reales
-a librerías criptográficas (cryptography, PyCryptodome, hashlib) y de cadenas
-de configuración (p. ej. listas de cifrados TLS).
-"""
 from __future__ import annotations
 
 import ast
 
 from .model import Finding
-from .rules import RULES, RULES_BY_ID
+from .rules import BROKEN, RULES, RULES_BY_ID
 
-# Final del nombre de la llamada -> regla. Se compara por sufijo: "rsa.generate_private_key"
+# Se compara por sufijo para cubrir cualquier forma de importar: "rsa.generate_private_key"
 # encaja con "cryptography.hazmat.primitives.asymmetric.rsa.generate_private_key".
 CALLS = {
     "rsa.generate_private_key": "rsa", "RSA.generate": "rsa", "RSA.import_key": "rsa",
@@ -29,10 +22,9 @@ CALLS = {
     "algorithms.TripleDES": "3des", "DES3.new": "3des", "DES.new": "des",
     "algorithms.ARC4": "rc4", "ARC4.new": "rc4",
 }
-HASHLIB_NEW = {"md5": "md5", "sha1": "sha1"}
 
 
-def _dotted(node: ast.AST) -> str:
+def dotted_name(node: ast.AST) -> str:
     parts = []
     while isinstance(node, ast.Attribute):
         parts.append(node.attr)
@@ -42,33 +34,38 @@ def _dotted(node: ast.AST) -> str:
     return ".".join(reversed(parts))
 
 
-def _match_call(name: str) -> str | None:
+def match_call(call: ast.Call) -> str | None:
+    name = dotted_name(call.func)
+    if name == "hashlib.new" and call.args and isinstance(call.args[0], ast.Constant):
+        algo = str(call.args[0].value).lower().replace("-", "")
+        return algo if algo in ("md5", "sha1") else None
     for suffix, rule_id in CALLS.items():
         if name == suffix or name.endswith("." + suffix):
             return rule_id
     return None
 
 
-def _key_size(call: ast.Call) -> int | None:
+def key_size(call: ast.Call) -> int | None:
     for kw in call.keywords:
         if kw.arg in ("key_size", "bits") and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, int):
             return kw.value.value
     return None
 
 
-def _make(rule_id: str, rel: str, line: int, lines: list[str], confidence: str, extra: dict | None = None) -> Finding:
+def make_finding(rule_id: str, rel: str, line: int, lines: list[str], confidence: str) -> Finding:
     r = RULES_BY_ID[rule_id]
-    ev = lines[line - 1].strip()[:160] if 0 < line <= len(lines) else ""
-    return Finding(r.id, r.name, r.status, r.primitive, rel, line, ev, r.replacement, "codigo",
-                   confidence=confidence, hndl=r.hndl, nist_level=r.nist_level, extra=extra or {})
+    evidence = lines[line - 1].strip()[:160] if 0 < line <= len(lines) else ""
+    return Finding(r.id, r.name, r.status, r.primitive, rel, line, evidence, r.replacement, "codigo",
+                   confidence=confidence, hndl=r.hndl, nist_level=r.nist_level)
 
 
 def scan_python(source: str, rel: str) -> list[Finding] | None:
-    """Devuelve los hallazgos, o None si el archivo no es Python válido (se usará el detector de texto)."""
+    """None si no es Python válido; el llamador usa entonces el detector de texto."""
     try:
         tree = ast.parse(source)
     except (SyntaxError, ValueError):
         return None
+
     lines = source.splitlines()
     found: dict[tuple[str, int], Finding] = {}
 
@@ -77,29 +74,28 @@ def scan_python(source: str, rel: str) -> list[Finding] | None:
         if key not in found or f.confidence == "alta":
             found[key] = f
 
-    # Las cadenas sueltas (docstrings) son documentación, no configuración: se ignoran.
-    doc_ids = {id(n.value) for n in ast.walk(tree)
-               if isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str)}
+    # Los docstrings hablan de algoritmos sin usarlos; solo interesan las cadenas que son datos.
+    docstrings = {id(n.value) for n in ast.walk(tree)
+                  if isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str)}
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
-            name = _dotted(node.func)
-            rule_id = _match_call(name)
-            if name == "hashlib.new" and node.args and isinstance(node.args[0], ast.Constant):
-                rule_id = HASHLIB_NEW.get(str(node.args[0].value).lower().replace("-", ""), rule_id)
-            if rule_id:
-                size = _key_size(node)
-                f = _make(rule_id, rel, node.lineno, lines, "alta", {"key_size": size} if size else None)
-                if rule_id == "rsa" and size and size < 2048:
-                    f.status = "roto_hoy"
-                add(f)
+            rule_id = match_call(node)
+            if not rule_id:
+                continue
+            f = make_finding(rule_id, rel, node.lineno, lines, "alta")
+            size = key_size(node)
+            if size:
+                f.extra["key_size"] = size
+                if rule_id == "rsa" and size < 2048:
+                    f.status = BROKEN
+            add(f)
         elif (isinstance(node, ast.Constant) and isinstance(node.value, str)
-              and id(node) not in doc_ids and len(node.value) < 2000):
-            # Cadenas: listas de cifrados, nombres de algoritmos en configuración, etc.
+              and id(node) not in docstrings and len(node.value) < 2000):
             text, hybrid_seen = node.value, False
             for r in RULES:
                 if r.rx.search(text):
-                    f = _make(r.id, rel, node.lineno, lines, "media")
+                    f = make_finding(r.id, rel, node.lineno, lines, "media")
                     f.fallback = hybrid_seen and r.primitive == "key-agree"
                     add(f)
                     if r.consumes:

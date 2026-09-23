@@ -1,12 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Alejandro Garcia Linero
-"""Salida SARIF 2.1.0 para GitHub Code Scanning y otras plataformas de análisis.
-
-Cada hallazgo se convierte en una alerta con su archivo y línea. GitHub muestra estas alertas
-en la pestaña "Security" y en los pull requests, junto a la línea de código afectada.
-Solo se incluyen hallazgos sobre archivos del repositorio: los de servidores en vivo no tienen
-una línea de código a la que apuntar y se quedan en el informe y el CBOM.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -17,7 +10,7 @@ from .rules import RULES_BY_ID
 
 INFO_URI = "https://github.com/alegarlinx/cuantario"
 
-# prioridad -> (nivel SARIF, security-severity que GitHub usa para clasificar en crítica/alta/media/baja)
+# security-severity es lo que usa GitHub para clasificar la alerta como crítica, alta, media o baja.
 LEVELS = {"CRITICO": ("error", "9.5"), "ALTO": ("error", "7.5"), "MEDIO": ("warning", "5.0"),
           "BAJO": ("note", "2.0")}
 
@@ -54,6 +47,7 @@ def _fingerprint(f: Finding) -> str:
 def build_sarif(findings: list[Finding]) -> dict:
     results, rules, order = [], {}, []
     for f in findings:
+        # Lo analizado en vivo no tiene archivo ni línea a la que GitHub pueda apuntar.
         if f.priority == "OK" or "://" in f.location:
             continue
         key = _rule_key(f)
@@ -73,7 +67,7 @@ def build_sarif(findings: list[Finding]) -> dict:
             }
             order.append(key)
         elif float(severity) > float(rules[key]["properties"]["security-severity"]):
-            rules[key]["properties"]["security-severity"] = severity  # la regla refleja su peor caso
+            rules[key]["properties"]["security-severity"] = severity
         location = {"physicalLocation": {"artifactLocation": {"uri": f.location.replace("\\", "/")}}}
         if f.line:
             location["physicalLocation"]["region"] = {"startLine": f.line}

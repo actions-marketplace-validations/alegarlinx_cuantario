@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Alejandro Garcia Linero
-"""Tests de la salida SARIF y validación de ambas salidas contra los esquemas oficiales."""
 import json
 import os
 from pathlib import Path
@@ -51,11 +50,11 @@ def test_sarif_private_key_is_redacted(tmp_path):
 
 def test_sarif_fingerprints_are_stable(tmp_path):
     (tmp_path / "a.py").write_text("import hashlib\nhashlib.md5(b'x')\n")
-    fp = lambda: [r["partialFingerprints"] for r in build_sarif(scan(tmp_path, Context()))["runs"][0]["results"]]
-    assert fp() == fp()
+    def fingerprints():
+        return [r["partialFingerprints"] for r in build_sarif(scan(tmp_path, Context()))["runs"][0]["results"]]
+    assert fingerprints() == fingerprints()
 
 
-# ---------------------------------------------------------------- esquemas oficiales
 SCHEMAS = Path(os.environ.get("PQC_SCHEMAS", "schemas")).resolve()
 needs_schemas = pytest.mark.skipif(not (SCHEMAS / "bom-1.6.schema.json").exists(),
                                    reason="esquemas no descargados (se descargan en CI)")
@@ -65,7 +64,9 @@ needs_schemas = pytest.mark.skipif(not (SCHEMAS / "bom-1.6.schema.json").exists(
 def test_outputs_match_official_schemas(tmp_path, monkeypatch):
     jsonschema = pytest.importorskip("jsonschema")
     referencing = pytest.importorskip("referencing")
-    load = lambda n: json.loads((SCHEMAS / n).read_text())
+
+    def load(name):
+        return json.loads((SCHEMAS / name).read_text())
     registry = referencing.Registry().with_resources(
         [(n, referencing.Resource.from_contents(load(n))) for n in ("spdx.schema.json", "jsf-0.82.schema.json")])
     cbom, sarif = _demo(tmp_path, monkeypatch)

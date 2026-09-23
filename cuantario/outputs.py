@@ -1,29 +1,46 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Alejandro Garcia Linero
-"""Salidas: CBOM (CycloneDX 1.6) e informe de migración en Markdown."""
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 
 from . import __version__
 from .model import Context, Finding, now
 from .rules import EU_MILESTONES, HYBRID, PRIORITIES, SAFE, SECRET, VULN
 
-PUBLIC_KEY = ("pke", "kem", "key-agree", "signature")
+KEY_EXCHANGE = ("pke", "kem", "key-agree")
+SIGNATURE = ("signature",)
 
 
-def readiness_score(findings: list[Finding]) -> tuple[int | None, int, int]:
-    relevant = [f for f in findings if f.primitive in PUBLIC_KEY and f.status in (VULN, SAFE, HYBRID)]
+@dataclass
+class Score:
+    value: int | None
+    ready: int
+    total: int
+
+    def text(self) -> str:
+        return "sin datos" if self.value is None else f"{self.value}/100"
+
+
+def _score(findings: list[Finding], primitives: tuple[str, ...]) -> Score:
+    relevant = [f for f in findings if f.primitive in primitives and f.status in (VULN, SAFE, HYBRID)
+                and not f.fallback]
     ready = sum(f.status in (SAFE, HYBRID) for f in relevant)
-    score = round(100 * ready / len(relevant)) if relevant else None  # sin datos no hay nota
-    return score, ready, len(relevant)
+    return Score(round(100 * ready / len(relevant)) if relevant else None, ready, len(relevant))
+
+
+# Se separan porque no tienen la misma urgencia: el intercambio de claves ya está expuesto a
+# "cosechar ahora, descifrar después", y los certificados post-cuánticos aún no existen en la web.
+def readiness_scores(findings: list[Finding]) -> tuple[Score, Score]:
+    return _score(findings, KEY_EXCHANGE), _score(findings, SIGNATURE)
 
 
 def build_cbom(findings: list[Finding], target: str) -> dict:
     comps: dict[str, dict] = {}
     for f in findings:
         if f.status == SECRET:
-            continue  # los secretos nunca van al CBOM
+            continue
         is_cert = f.source == "certificado"
         ref = f"crypto/{'certificate' if is_cert else 'algorithm'}/{f.rule_id}"
         c = comps.get(ref)
@@ -57,7 +74,6 @@ def build_cbom(findings: list[Finding], target: str) -> dict:
 
 
 def mosca_message(findings: list[Finding], ctx: Context) -> str:
-    """Conclusión de la desigualdad de Mosca, según lo que se haya encontrado realmente."""
     exposed = [f for f in findings if f.status == VULN and f.hndl and not f.fallback]
     if not ctx.mosca_violated:
         return "La desigualdad no se cumple con estos parámetros, pero conviene planificar la migración."
@@ -71,14 +87,22 @@ def mosca_message(findings: list[Finding], ctx: Context) -> str:
 
 def build_report(findings: list[Finding], ctx: Context, target: str, unreachable: list[str] | None = None) -> str:
     counts = {p: sum(f.priority == p for f in findings) for p in PRIORITIES}
-    score, ready, total = readiness_score(findings)
+    kex, sig = readiness_scores(findings)
     L = [f"# Informe de preparación post-cuántica: `{target}`", "",
          f"Generado por Cuantario {__version__} el {now():%d/%m/%Y %H:%M} UTC · perfil `{ctx.profile}` · "
          f"riesgo del sector `{'alto' if ctx.high_risk else 'medio'}`", "",
          "## Resumen", "",
-         (f"**Índice de preparación PQC (clave pública): {score}/100** "
-          f"({ready} de {total} usos de clave pública son resistentes o híbridos)." if score is not None else
-          "**Índice de preparación PQC: sin datos** (no se encontró criptografía de clave pública)."), "",
+         "**Índice de preparación post-cuántica**", "",
+         "| Uso | Índice | Detalle |", "|---|---|---|",
+         f"| Intercambio de claves y cifrado | **{kex.text()}** | "
+         + (f"{kex.ready} de {kex.total} protegidos con criptografía híbrida o post-cuántica |" if kex.total
+            else "no se encontraron usos |"),
+         f"| Firmas y certificados | **{sig.text()}** | "
+         + (f"{sig.ready} de {sig.total} resistentes |" if sig.total else "no se encontraron usos |"), "",
+         "El intercambio de claves es lo urgente: lo que se cifra hoy puede capturarse y descifrarse cuando "
+         "exista el ordenador cuántico. Las firmas solo corren peligro a partir de ese momento, y los certificados "
+         "post-cuánticos todavía no se usan de forma general en la web, así que un índice bajo en firmas es lo "
+         "habitual hoy. Los grupos clásicos que se mantienen como respaldo junto a uno híbrido no restan.", "",
          "| Prioridad | Hallazgos |", "|---|---|"]
     L += [f"| {p} | {counts[p]} |" for p in PRIORITIES]
     L += ["", "## Parámetros de Mosca", "",
@@ -102,7 +126,8 @@ def build_report(findings: list[Finding], ctx: Context, target: str, unreachable
         L.append("")
     ok = [f for f in findings if f.priority == "OK"]
     if ok:
-        L += [f"## Correcto ({len(ok)})", "", "Criptografía resistente, híbrida o con margen suficiente. No requiere acción.", "",
+        L += [f"## Correcto ({len(ok)})", "",
+              "Criptografía resistente, híbrida o con margen suficiente. No requiere acción.", "",
               "| Activo | Ubicación | Confianza | Evidencia |", "|---|---|---|---|"]
         for f in ok[:60]:
             loc = f"{f.location}:{f.line}" if f.line else f.location

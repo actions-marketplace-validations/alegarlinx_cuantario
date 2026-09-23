@@ -1,17 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Alejandro Garcia Linero
-"""Catálogo de algoritmos: cómo se reconocen y cómo se clasifican."""
 from __future__ import annotations
 
+import functools
 import re
 from dataclasses import dataclass
 
-# Estado frente a la amenaza cuántica
-VULN = "vulnerable"        # roto por el algoritmo de Shor (RSA, ECC, DH, DSA)
-WEAK = "debilitado"        # Grover reduce su margen (AES-128)
-SAFE = "resistente"        # PQC estandarizada o simétrico con margen suficiente
-HYBRID = "hibrido"         # clásico + PQC, lo recomendado por ENISA durante la transición
-BROKEN = "roto_hoy"        # inseguro incluso sin ordenador cuántico
+VULN = "vulnerable"   # Shor
+WEAK = "debilitado"   # Grover
+SAFE = "resistente"
+HYBRID = "hibrido"
+BROKEN = "roto_hoy"
 SECRET = "secreto_expuesto"
 
 PRIORITIES = ["CRITICO", "ALTO", "MEDIO", "BAJO", "OK"]
@@ -33,25 +32,21 @@ class Rule:
     id: str
     name: str
     pattern: str
-    primitive: str          # vocabulario de CycloneDX 1.6
+    primitive: str  # vocabulario de CycloneDX 1.6
     status: str
-    hndl: bool              # ¿expuesto a "cosechar ahora, descifrar después"?
+    hndl: bool
     replacement: str
     nist_level: int = 0
-    consumes: bool = False  # borra lo emparejado antes de aplicar las demás reglas
+    consumes: bool = False
 
     @property
     def rx(self) -> re.Pattern:
-        return _compiled(self.pattern)
+        return _compile(self.pattern)
 
 
-_CACHE: dict[str, re.Pattern] = {}
-
-
-def _compiled(pattern: str) -> re.Pattern:
-    if pattern not in _CACHE:
-        _CACHE[pattern] = re.compile(pattern)
-    return _CACHE[pattern]
+@functools.cache
+def _compile(pattern: str) -> re.Pattern:
+    return re.compile(pattern)
 
 
 RULES: list[Rule] = [

@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Alejandro Garcia Linero
-"""Hallazgos, contexto del análisis y reglas de priorización."""
 from __future__ import annotations
 
 import datetime as dt
@@ -23,10 +22,10 @@ class Finding:
     line: int
     evidence: str
     replacement: str
-    source: str                 # "codigo", "config", "certificado", "secreto"
-    confidence: str = "media"   # alta (AST/certificado), media (config/cadena), baja (texto en código)
+    source: str
+    confidence: str = "media"
     hndl: bool = False
-    fallback: bool = False      # clásico ofrecido junto a un grupo híbrido
+    fallback: bool = False
     nist_level: int = 0
     priority: str = "OK"
     reason: str = ""
@@ -43,7 +42,6 @@ class Context:
 
     @property
     def mosca_violated(self) -> bool:
-        """Desigualdad de Mosca: vida del dato + tiempo de migración > años hasta el CRQC."""
         return now().year + self.data_life + self.migration > self.crqc_year
 
 

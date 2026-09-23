@@ -1,5 +1,12 @@
 # Registro de cambios
 
+## 0.5.3
+- El índice de preparación se divide en dos: **intercambio de claves y cifrado** (lo urgente, expuesto a
+  "cosechar ahora, descifrar después") y **firmas y certificados**. Antes se mezclaban, y servidores
+  punteros como los de Cloudflare o Google obtenían una nota engañosamente baja.
+- Los grupos clásicos mantenidos como respaldo junto a uno híbrido ya no restan en el índice.
+- El informe explica cómo interpretar ambos índices.
+
 ## 0.5.2
 - Validado contra servidores reales con criptografía post-cuántica (Cloudflare y Google):
   detecta correctamente `X25519MLKEM768`, `MLKEM1024` y la preferencia del servidor.

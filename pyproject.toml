@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cuantario"
-version = "0.5.2"
+version = "0.5.3"
 description = "Inventario criptográfico y priorización post-cuántica con políticas europeas (UE / CCN)"
 readme = "README.md"
 requires-python = ">=3.10"

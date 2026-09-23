@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Alejandro Garcia Linero
-"""Tests de Cuantario. Ejecutar con: pytest -q"""
 import datetime as dt
 import json
 
@@ -18,7 +17,6 @@ def ids(findings):
     return {f.rule_id for f in findings}
 
 
-# ---------------------------------------------------------------- reglas de texto
 @pytest.mark.parametrize("text,expected", [
     ("KeyPairGenerator.getInstance(\"RSA\")", {"rsa"}),
     ("HostKeyAlgorithms ssh-ed25519", {"eddsa"}),
@@ -52,7 +50,6 @@ def test_classical_fallback_next_to_hybrid_is_medium():
     assert fb.priority == "MEDIO"
 
 
-# ---------------------------------------------------------------- análisis sintáctico de Python
 def test_ast_ignores_comments_and_docstrings():
     src = '"""Antes usábamos RSA."""\n# TODO quitar MD5\nx = 1\n'
     assert scan_python(src, "a.py") == []
@@ -88,7 +85,6 @@ def test_invalid_python_falls_back_to_text(tmp_path):
     assert f.rule_id == "rsa" and f.confidence == "baja"
 
 
-# ---------------------------------------------------------------- priorización
 def _vuln_kex():
     r = RULES_BY_ID["ecdh"]
     return Finding(r.id, r.name, VULN, r.primitive, "f", 1, "", r.replacement, "config", hndl=True)
@@ -106,7 +102,6 @@ def test_mosca_not_violated_is_high():
     assert f.priority == "ALTO"
 
 
-# ---------------------------------------------------------------- certificados
 def _write_cert(path, bits, years):
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
@@ -122,14 +117,12 @@ def _write_cert(path, bits, years):
 
 
 def test_weak_certificate_is_critical(tmp_path):
-    pytest.importorskip("cryptography")
     _write_cert(tmp_path / "weak.pem", 1024, 1)
     [f] = scan(tmp_path, Context(high_risk=False))
     assert f.priority == "CRITICO" and f.status == "roto_hoy"
 
 
 def test_long_lived_certificate_depends_on_risk(tmp_path):
-    pytest.importorskip("cryptography")
     _write_cert(tmp_path / "c.pem", 2048, 8)
     assert scan(tmp_path, Context(high_risk=True))[0].priority == "CRITICO"
     assert scan(tmp_path, Context(high_risk=False))[0].priority == "MEDIO"
@@ -142,7 +135,6 @@ def test_private_key_is_reported_and_redacted(tmp_path):
     assert build_cbom([f], "t")["components"] == []  # nunca va al CBOM
 
 
-# ---------------------------------------------------------------- de principio a fin
 def test_cli_demo_end_to_end(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert main(["--demo", "--fail-on", "CRITICO"]) == 1
@@ -164,7 +156,6 @@ def test_min_confidence_filter(tmp_path, monkeypatch):
     assert ctx == {"confianza=alta"}
 
 
-# ---------------------------------------------------------------- informe
 def _report_for(line: str, ctx: Context) -> str:
     from cuantario.outputs import build_report
     findings = scan_text(line, "tls://ejemplo:443", "tls", "alta")
@@ -194,3 +185,35 @@ def test_report_lists_ok_findings():
     report = _report_for("grupos aceptados: X25519MLKEM768, X25519", Context())
     assert "## Correcto (1)" in report
     assert "Intercambio híbrido clásico + ML-KEM" in report.split("## Correcto")[1]
+
+
+def _scores_for(*lines):
+    from cuantario.outputs import readiness_scores
+    findings = []
+    for line in lines:
+        findings += scan_text(line, "tls://ejemplo:443", "tls", "alta")
+    return readiness_scores(findings)
+
+
+def test_scores_like_cloudflare():
+    # Híbrido preferido, X25519 de respaldo y certificado ECDSA: el caso real de Cloudflare.
+    kex, sig = _scores_for("grupos aceptados: X25519MLKEM768, X25519", "firma ECDSA")
+    assert kex.text() == "100/100" and (kex.ready, kex.total) == (1, 1)   # el respaldo no resta
+    assert sig.text() == "0/100"
+
+
+def test_scores_classical_server():
+    kex, sig = _scores_for("grupos aceptados: X25519, ECDHE-P256")
+    assert kex.text() == "0/100" and sig.text() == "sin datos"
+
+
+def test_scores_without_public_key_crypto():
+    kex, sig = _scores_for("cifrado AES-256-GCM")
+    assert kex.text() == "sin datos" and sig.text() == "sin datos"
+
+
+def test_report_shows_both_scores(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    main(["--demo"])
+    report = (tmp_path / "cuantario_informe.md").read_text()
+    assert "| Intercambio de claves y cifrado |" in report and "| Firmas y certificados |" in report

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Alejandro Garcia Linero
-"""Tests del escaneo en vivo con servidores TLS y SSH simulados en local."""
+import contextlib
 import os
 import socket
 import struct
@@ -9,13 +9,11 @@ import threading
 import pytest
 
 from cuantario.model import Context
-from cuantario.probes import (HRR_RANDOM, build_client_hello, parse_server_response, parse_target, scan_ssh,
-                              scan_tls)
+from cuantario.probes import HRR_RANDOM, build_client_hello, parse_server_response, parse_target, scan_ssh, scan_tls
 
 PQ = {0x11EC, 0x11EB, 0x11ED, 0x0201, 0x0202}
 
 
-# ---------------------------------------------------------------- servidores simulados
 def _serve(handler):
     srv = socket.socket()
     srv.bind(("127.0.0.1", 0))
@@ -28,11 +26,8 @@ def _serve(handler):
                 conn, _ = srv.accept()
             except OSError:
                 return
-            with conn:
-                try:
-                    handler(conn)
-                except OSError:
-                    pass
+            with conn, contextlib.suppress(OSError):
+                handler(conn)
 
     threading.Thread(target=loop, daemon=True).start()
     return srv, srv.getsockname()[1]
@@ -112,7 +107,6 @@ def by_rule(findings):
     return {f.rule_id: f for f in findings}
 
 
-# ---------------------------------------------------------------- unidades
 @pytest.mark.parametrize("text,expected", [
     ("ejemplo.es", ("ejemplo.es", 443)),
     ("ejemplo.es:8443", ("ejemplo.es", 8443)),
@@ -144,7 +138,6 @@ def test_parse_hrr_and_alert():
     assert parse_server_response(read)["type"] == "alert"
 
 
-# ---------------------------------------------------------------- TLS de principio a fin
 def test_tls_server_preferring_pq_is_ok():
     srv, port = tls_server({0x11EC, 0x001D}, "pq")
     with srv:
@@ -179,7 +172,6 @@ def test_tls_server_without_pq():
     assert f["ecdh"].location == f"tls://127.0.0.1:{port}"
 
 
-# ---------------------------------------------------------------- SSH de principio a fin
 def test_ssh_server_with_hybrid_kex():
     srv, port = ssh_server("mlkem768x25519-sha256,sntrup761x25519-sha512,curve25519-sha256,ext-info-s",
                            "rsa-sha2-512,ssh-ed25519", "chacha20-poly1305@openssh.com,aes128-ctr")
@@ -202,7 +194,6 @@ def test_ssh_server_classical_only():
     assert f["ecdh"].priority == "CRITICO" and f["dh"].priority == "CRITICO"
 
 
-# ---------------------------------------------------------------- integración con OpenSSL real
 @pytest.mark.skipif(not __import__("shutil").which("openssl"), reason="openssl no disponible")
 def test_real_openssl_server(tmp_path):
     import subprocess
