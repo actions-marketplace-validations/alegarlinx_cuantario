@@ -1,5 +1,15 @@
 # Registro de cambios
 
+## 0.8.0
+- Modo estudio (`--estudio lista.txt`): mide una lista de dominios en paralelo y genera un resumen con
+  porcentajes y metodología, sin nombres, más un JSON con los datos por dominio para uso privado.
+  Distingue los dominios que no se pudieron medir (y por qué) de los que no admiten PQC.
+- `--lista` para analizar muchos servidores TLS en el modo normal. Acepta el formato `rango,dominio` de Tranco.
+- `scripts/preparar_lista.py` extrae los N primeros dominios de un TLD de una lista de Tranco.
+- Guía del estudio en `ESTUDIO.md`.
+- La medición TLS se separa en un perfil estructurado (`probe_tls`) y su conversión en hallazgos
+  (`tls_detections`).
+
 ## 0.7.0
 - TLS 1.0 y 1.1 se detectan con un ClientHello propio por versión. Antes, un servidor que solo aceptaba
   TLS 1.0 daba 0 hallazgos sin avisar, porque OpenSSL 3 se niega a negociar esas versiones.

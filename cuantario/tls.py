@@ -300,17 +300,23 @@ def fetch_chain_ssl(host: str, port: int, timeout: float) -> list[x509.Certifica
         return []
 
 
-def trust_note(host: str, port: int, timeout: float) -> str:
+class Trust(Enum):
+    VALID = "valid"
+    INVALID = "invalid"
+    UNKNOWN = "unknown"
+
+
+def check_trust(host: str, port: int, timeout: float) -> tuple[Trust, str]:
     ctx = ssl.create_default_context()
     try:
         with (socket.create_connection((host, port), timeout=timeout) as raw,
               ctx.wrap_socket(raw, server_hostname=host) as sock):
             sock.version()
     except ssl.SSLCertVerificationError as e:
-        return f"La cadena no valida contra el almacén del sistema: {e.verify_message}."
+        return Trust.INVALID, f"La cadena no valida contra el almacén del sistema: {e.verify_message}."
     except (OSError, ValueError):
-        return "No se pudo comprobar la cadena contra el almacén del sistema."
-    return "La cadena valida contra el almacén del sistema."
+        return Trust.UNKNOWN, "No se pudo comprobar la cadena contra el almacén del sistema."
+    return Trust.VALID, "La cadena valida contra el almacén del sistema."
 
 
 def _preference(host: str, submit: Callable[[bytes], Future[ServerReply]]) -> ServerPreference:
@@ -335,9 +341,32 @@ def _suite_detections(suite_code: int | None, version: TlsVersion, location: Loc
             for rule_id in suite.rule_ids]
 
 
-def scan_tls(host: str, port: int, config: ProbeConfig | None = None) -> list[Detection]:
+@dataclass(frozen=True, kw_only=True)
+class TlsProfile:
+    host: str
+    port: int
+    legacy_versions: tuple[TlsVersion, ...]
+    legacy_suite: int | None
+    groups: tuple[int, ...]
+    tls13_suite: int | None
+    preference: ServerPreference | None
+    missing: tuple[str, ...]
+    chain: tuple[x509.Certificate, ...]
+    chain_complete: bool
+    trust: Trust
+    trust_message: str
+
+    @property
+    def tls13(self) -> bool:
+        return bool(self.groups)
+
+    @property
+    def best_legacy(self) -> TlsVersion | None:
+        return max(self.legacy_versions, key=lambda v: v.value) if self.legacy_versions else None
+
+
+def probe_tls(host: str, port: int, config: ProbeConfig | None = None) -> TlsProfile:
     config = config or ProbeConfig()
-    location = Location(f"tls://{host}:{port}")
     limiter = RateLimiter(config.min_interval)
 
     with ThreadPoolExecutor(max_workers=config.workers) as pool:
@@ -354,44 +383,62 @@ def scan_tls(host: str, port: int, config: ProbeConfig | None = None) -> list[De
         if all(r.kind is Reply.NETWORK_ERROR for r in all_replies):
             raise NetworkError(f"el servidor no responde ({all_replies[0].detail})")
 
-        legacy_ok = [v for v, r in legacy_replies.items() if r.kind is Reply.SERVER_HELLO and r.version is v]
-        supported = [g for g, r in group_replies.items() if r.kind is Reply.HELLO_RETRY and r.group == g]
+        legacy_ok = tuple(v for v, r in legacy_replies.items() if r.kind is Reply.SERVER_HELLO and r.version is v)
+        supported = tuple(g for g, r in group_replies.items() if r.kind is Reply.HELLO_RETRY and r.group == g)
         missing = [v.label for v, r in legacy_replies.items() if r.kind is Reply.NETWORK_ERROR]
         missing += [GROUPS[g].name for g, r in group_replies.items() if r.kind is Reply.NETWORK_ERROR]
-        has_tls13 = bool(supported)
         preference = _preference(host, submit) if any(g in PQ_GROUPS for g in supported) else None
 
+    chain = fetch_chain_legacy(host, port, config, limiter) if legacy_ok else []
+    if not chain:
+        chain = fetch_chain_ssl(host, port, config.timeout)
+    trust, trust_message = check_trust(host, port, config.timeout) if chain else (Trust.UNKNOWN, "")
+    best = max(legacy_ok, key=lambda v: v.value) if legacy_ok else None
+    return TlsProfile(
+        host=host, port=port, legacy_versions=legacy_ok,
+        legacy_suite=legacy_replies[best].cipher_suite if best else None,
+        groups=supported,
+        tls13_suite=next((group_replies[g].cipher_suite for g in supported), None),
+        preference=preference, missing=tuple(missing), chain=tuple(chain),
+        chain_complete=bool(legacy_ok) or hasattr(ssl.SSLSocket, "get_unverified_chain"),
+        trust=trust, trust_message=trust_message,
+    )
+
+
+def tls_detections(profile: TlsProfile) -> list[Detection]:
+    location = Location(f"tls://{profile.host}:{profile.port}")
     detections: list[Detection] = []
-    for version in legacy_ok:
+    for version in profile.legacy_versions:
         if version in (TlsVersion.TLS10, TlsVersion.TLS11):
             detections.append(detect("tls-legacy", location=location, source=Source.TLS,
                                      confidence=Confidence.HIGH,
                                      evidence=Evidence(snippet=f"{version.label} aceptado")))
 
-    if has_tls13:
-        suite = next((r.cipher_suite for g, r in group_replies.items() if g in supported), None)
-        detections += _suite_detections(suite, TlsVersion.TLS13, location, ())
-    elif legacy_ok:
-        best = max(legacy_ok, key=lambda v: v.value)
-        detections += _suite_detections(legacy_replies[best].cipher_suite, best, location,
+    if profile.tls13:
+        detections += _suite_detections(profile.tls13_suite, TlsVersion.TLS13, location, ())
+    elif profile.best_legacy:
+        detections += _suite_detections(profile.legacy_suite, profile.best_legacy, location,
                                         ("sin TLS 1.3 no es posible el intercambio híbrido post-cuántico",))
 
-    notes = (f"sin respuesta al sondear {', '.join(missing)}: resultado incompleto",) if missing else ()
-    for code in supported:
+    notes = ((f"sin respuesta al sondear {', '.join(profile.missing)}: resultado incompleto",)
+             if profile.missing else ())
+    for code in profile.groups:
         group = GROUPS[code]
         detections.append(detect(
             group.rule_id, location=location, source=Source.TLS,
-            confidence=Confidence.MEDIUM if missing else Confidence.HIGH,
-            evidence=Evidence(snippet=group.name, notes=notes, server_preference=preference),
-            fallback=not group.post_quantum and preference not in (None, ServerPreference.PREFERS_CLASSICAL),
+            confidence=Confidence.MEDIUM if profile.missing else Confidence.HIGH,
+            evidence=Evidence(snippet=group.name, notes=notes, server_preference=profile.preference),
+            fallback=not group.post_quantum
+            and profile.preference not in (None, ServerPreference.PREFERS_CLASSICAL),
         ))
 
-    chain = fetch_chain_legacy(host, port, config, limiter) if legacy_ok else []
-    if not chain:
-        chain = fetch_chain_ssl(host, port, config.timeout)
-    if chain:
-        leaf_notes = [trust_note(host, port, config.timeout)]
-        if len(chain) == 1 and not legacy_ok and not hasattr(ssl.SSLSocket, "get_unverified_chain"):
+    if profile.chain:
+        leaf_notes = [profile.trust_message]
+        if len(profile.chain) == 1 and not profile.chain_complete:
             leaf_notes.append("Solo TLS 1.3 y Python < 3.13: solo se ha podido obtener el certificado hoja.")
-        detections += chain_detections(chain, location, tuple(leaf_notes))
+        detections += chain_detections(list(profile.chain), location, tuple(leaf_notes))
     return detections
+
+
+def scan_tls(host: str, port: int, config: ProbeConfig | None = None) -> list[Detection]:
+    return tls_detections(probe_tls(host, port, config))

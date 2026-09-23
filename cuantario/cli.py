@@ -13,13 +13,14 @@ from typing import Any
 
 from . import __version__
 from .demo import make_demo
-from .model import Context, Detection, assess
+from .model import Context, Detection, assess, now
 from .net import NetworkError, ProbeConfig, ProtocolError, parse_target
 from .outputs import build_cbom, build_report, readiness_scores
 from .rules import Confidence, Priority, Profile
 from .sarif import build_sarif
 from .scanner import ScanResult, scan
 from .ssh import scan_ssh
+from .study import load_list, run_study, save_raw, study_report
 from .tls import scan_tls
 
 Target = tuple[str, int]
@@ -80,6 +81,12 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--hosts-paralelos", type=_bounded_int(1, 32, "hosts en paralelo"), default=4)
     ap.add_argument("--intervalo", type=_positive_float, default=0.1,
                     help="segundos mínimos entre conexiones al mismo host")
+    ap.add_argument("--lista", type=Path, metavar="FICHERO",
+                    help="fichero con un servidor TLS por línea (admite el formato 'rango,dominio' de Tranco)")
+    ap.add_argument("--estudio", type=Path, metavar="FICHERO",
+                    help="medir una lista de dominios y generar solo estadísticas agregadas, sin nombres")
+    ap.add_argument("--fuente", default="Lista de dominios propia",
+                    help="descripción de la lista para la metodología, p. ej. 'Tranco, lista XXXX, top 200 .es'")
     ap.add_argument("--demo", action="store_true", help="crear y analizar un proyecto de ejemplo")
     ap.add_argument("--version", action="version", version=f"cuantario {__version__}")
     return ap
@@ -106,9 +113,43 @@ def _probe_hosts(args: argparse.Namespace) -> tuple[list[Detection], list[str]]:
     return detections, unreachable
 
 
+def _load_hosts(ap: argparse.ArgumentParser, path: Path) -> list[str]:
+    try:
+        return load_list(path)
+    except OSError as e:
+        ap.error(f"no se pudo leer {path}: {e.strerror or e}")
+    except ValueError as e:
+        ap.error(str(e))
+
+
+def _run_study(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    domains = _load_hosts(ap, args.estudio)
+    config = ProbeConfig(timeout=args.timeout, min_interval=args.intervalo)
+
+    def progress(done: int, total: int) -> None:
+        print(f"\r  {done}/{total} dominios", end="", file=sys.stderr, flush=True)
+
+    print(f"Estudio sobre {len(domains)} dominios (unas 15 conexiones por dominio)…", file=sys.stderr)
+    results = run_study(domains, config, args.hosts_paralelos, progress)
+    print(file=sys.stderr)
+    raw_path, report_path = Path(f"{args.salida}_datos.json"), Path(f"{args.salida}_resumen.md")
+    save_raw(results, raw_path)
+    meta = {"date": f"{now():%d/%m/%Y}", "source": args.fuente, "timeout": args.timeout,
+            "workers": args.hosts_paralelos, "interval": args.intervalo}
+    report_path.write_text(study_report(results, meta), encoding="utf-8")
+    measured = sum(r.reachable for r in results)
+    print(f"Medidos {measured} de {len(results)} dominios.")
+    print(f"Salidas: {report_path} (publicable, sin nombres) · {raw_path} (datos por dominio: no publicar)")
+    return 0
+
+
 def run(argv: list[str] | None) -> int:
     ap = parser()
     args = ap.parse_args(argv)
+    if args.estudio:
+        return _run_study(ap, args)
+    if args.lista:
+        args.tls += [parse_target(h, 443) for h in _load_hosts(ap, args.lista)]
     root: Path | None
     if args.demo:
         root = Path("cuantario_demo")
@@ -120,7 +161,7 @@ def run(argv: list[str] | None) -> int:
     elif args.tls or args.ssh:
         root = None
     else:
-        ap.error("indica una RUTA, usa --tls/--ssh o --demo")
+        ap.error("indica una RUTA, usa --tls/--ssh/--lista, --estudio o --demo")
 
     ctx = Context(profile=Profile(args.perfil), high_risk=args.riesgo == "alto", data_life=args.vida_datos,
                   migration=args.anos_migracion, crqc_year=args.ano_crqc)

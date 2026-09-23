@@ -31,6 +31,9 @@ cuantario --tls ejemplo.es --tls ejemplo.es:8443 --ssh ejemplo.es
 cuantario --demo
 ```
 
+Para analizar muchos servidores, `--lista fichero.txt` (uno por línea). Para un estudio con estadísticas
+agregadas y sin nombres, `--estudio`: ver [ESTUDIO.md](ESTUDIO.md).
+
 `cuantario --help` lista todas las opciones. Las que más se usan:
 
 - `--vida-datos`, `--anos-migracion`, `--ano-crqc`: parámetros de la desigualdad de Mosca. Con los valores
