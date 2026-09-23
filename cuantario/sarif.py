@@ -11,7 +11,6 @@ from .rules import RULES_BY_ID, Priority
 
 INFO_URI = "https://github.com/alegarlinx/cuantario"
 
-# security-severity es lo que usa GitHub para clasificar la alerta como crítica, alta, media o baja.
 LEVELS = {
     Priority.CRITICAL: ("error", "9.5"),
     Priority.HIGH: ("error", "7.5"),

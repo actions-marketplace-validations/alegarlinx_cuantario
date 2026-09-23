@@ -80,7 +80,6 @@ ALERT = b"\x15\x03\x03\x00\x02\x02\x28"
 
 
 def tls_server(supported: set[int], mode: str):
-    """mode: 'pq' (el servidor prefiere PQC), 'cliente' (sigue al cliente), 'clasico' (prefiere clásico)."""
     def handler(conn):
         header = _recv(conn, 5)
         hello = _recv(conn, struct.unpack(">H", header[3:5])[0])

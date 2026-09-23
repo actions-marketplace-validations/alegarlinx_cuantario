@@ -42,8 +42,6 @@ def by_rule(findings):
     return {f.rule_id: f for f in findings}
 
 
-# Tipos
-
 def test_finding_rejects_positional_arguments():
     with pytest.raises(TypeError):
         Finding("rsa", "RSA", Status.VULNERABLE, Primitive.PKE, Source.CODE, "a.py")  # type: ignore[misc]
@@ -66,8 +64,6 @@ def test_priority_does_not_depend_on_call_order():
     assert all(f.priority is None for f in raw)  # evaluar no toca los originales
 
 
-# Entrada de la CLI
-
 @pytest.mark.parametrize("text", ["ejemplo.es:abc", "ejemplo.es:0", "ejemplo.es:70000", ":443", "[::1",
                                   "[::1]x", "con espacio.es"])
 def test_parse_target_rejects_garbage(text):
@@ -87,8 +83,6 @@ def test_cli_reports_bad_input_without_traceback(args, capsys):
 def test_demo_code_lives_outside_the_cli():
     assert not hasattr(cli, "DEMO_FILES")
 
-
-# Parsers binarios
 
 @settings(max_examples=500, deadline=None)
 @given(st.binary(max_size=300))
@@ -124,8 +118,6 @@ def test_ssh_parser_raises_protocol_error(raw):
         scan_ssh("127.0.0.1", port, timeout=2)
 
 
-# Una sonda que no responde no tumba el host
-
 def test_one_hanging_probe_does_not_discard_the_rest():
     def handler(conn):
         header = _recv(conn, 5)
@@ -154,8 +146,6 @@ def test_dead_server_is_reported_as_unreachable():
     with pytest.raises(ConnectionError):
         scan_tls("127.0.0.1", port, timeout=0.5)
 
-
-# Detección
 
 @pytest.mark.parametrize("src", [
     "import hashlib as h\nh.md5(b'x')\n",

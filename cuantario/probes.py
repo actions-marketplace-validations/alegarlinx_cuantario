@@ -39,7 +39,7 @@ SIG_ALGS = [0x0403, 0x0503, 0x0603, 0x0804, 0x0805, 0x0806, 0x0401, 0x0501, 0x06
 
 
 class ProtocolError(ValueError):
-    """El servidor respondió algo que no se puede interpretar."""
+    pass
 
 
 class Reply(Enum):

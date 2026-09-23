@@ -140,7 +140,6 @@ def test_cli_demo_end_to_end(tmp_path, monkeypatch):
     assert cbom["bomFormat"] == "CycloneDX" and cbom["specVersion"] == "1.6"
     report = (tmp_path / "cuantario_informe.md").read_text()
     assert "Informe de preparación post-cuántica" in report
-    # el docstring y el comentario del demo mencionan RSA/MD5 y no deben aparecer como hallazgos
     lines = {(o["location"], o.get("line")) for c in cbom["components"] for o in c["evidence"]["occurrences"]}
     assert ("app/crypto_utils.py", 1) not in lines
     assert ("app/crypto_utils.py", 5) not in lines
@@ -161,7 +160,6 @@ def _report_for(line: str, ctx: Context) -> str:
 
 
 def test_mosca_message_not_alarming_when_everything_has_pq():
-    # Caso real de Cloudflare/Google: híbrido preferido y X25519 como respaldo.
     report = _report_for("grupos aceptados: X25519MLKEM768, X25519", Context())
     assert "ya son urgentes" not in report and "migración es urgente" not in report
     assert "no se ha encontrado cifrado ni intercambio de claves clásico sin protección" in report

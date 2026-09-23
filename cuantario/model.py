@@ -123,6 +123,5 @@ def rank(f: Finding) -> int:
 
 
 def assess(findings: Iterable[Finding], ctx: Context, min_confidence: Confidence = Confidence.LOW) -> list[Finding]:
-    """Único punto donde se asigna prioridad; el resto del código solo produce hallazgos."""
     assessed = [prioritize(f, ctx) for f in findings if f.confidence.rank <= min_confidence.rank]
     return sorted(assessed, key=lambda f: (rank(f), f.location, f.line))
